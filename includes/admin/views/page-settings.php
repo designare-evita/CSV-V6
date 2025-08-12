@@ -54,8 +54,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 							<td>
 								<select id="csv_import_page_builder" name="csv_import_page_builder">
 									<?php
-									$pb_options = [ 'gutenberg' => 'Gutenberg (Standard)', 'elementor' => 'Elementor', 'wpbakery' => 'WPBakery' ];
-									$current_pb = get_option( 'csv_import_page_builder', 'gutenberg' );
+									$pb_options = [
+    'gutenberg' => 'Gutenberg (Standard)',
+    'elementor' => 'Elementor',
+    'wpbakery' => 'WPBakery',
+    'breakdance' => 'Breakdance', 
+    'enfold' => 'Enfold'        
+];
 									foreach ( $pb_options as $val => $label ) {
 										echo '<option value="' . esc_attr( $val ) . '" ' . selected( $current_pb, $val, false ) . '>' . esc_html( $label ) . '</option>';
 									}
