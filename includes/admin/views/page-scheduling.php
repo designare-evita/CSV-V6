@@ -1,4 +1,55 @@
 <?php
+
+// QUICK FIX: Scheduler-Historie korrekt laden
+if (empty($scheduled_imports)) {
+    // Alle verfügbaren Log-Quellen sammeln
+    $history = [];
+    
+    // Error Handler Logs durchsuchen
+    if (class_exists('CSV_Import_Error_Handler')) {
+        $error_logs = CSV_Import_Error_Handler::get_persistent_errors();
+        if (is_array($error_logs)) {
+            foreach ($error_logs as $log) {
+                if (isset($log['message'])) {
+                    $msg = strtolower($log['message']);
+                    // Breite Kriterien für Import-Logs
+                    if (strpos($msg, 'import') !== false && 
+                        (strpos($msg, 'gestartet') !== false || 
+                         strpos($msg, 'erfolgreich') !== false ||
+                         strpos($msg, 'abgeschlossen') !== false ||
+                         (isset($log['user_id']) && $log['user_id'] == 0))) {
+                        
+                        $history[] = [
+                            'time' => $log['time'] ?? date('Y-m-d H:i:s'),
+                            'level' => $log['level'] ?? 'info',
+                            'message' => $log['message']
+                        ];
+                    }
+                }
+            }
+        }
+    }
+    
+    // Letzte Import-Statistiken hinzufügen
+    $last_run = get_option('csv_import_last_run');
+    $last_count = get_option('csv_import_last_count', 0);
+    $last_source = get_option('csv_import_last_source', 'Unbekannt');
+    
+    if ($last_run && $last_count > 0) {
+        $history[] = [
+            'time' => $last_run,
+            'level' => 'info',
+            'message' => "Import erfolgreich abgeschlossen: {$last_count} Einträge verarbeitet (Quelle: {$last_source})"
+        ];
+    }
+    
+    // Sortieren und begrenzen
+    usort($history, function($a, $b) {
+        return strtotime($b['time']) - strtotime($a['time']);
+    });
+    
+    $scheduled_imports = array_slice($history, 0, 20);
+}
 /**
  * View-Datei für die Scheduling Seite.
  * NEUE VERSION: Modernes Grid-Layout, angepasst an das Haupt-Dashboard.
