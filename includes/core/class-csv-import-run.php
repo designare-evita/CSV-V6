@@ -221,7 +221,7 @@ class CSV_Import_Pro_Run {
 	private function create_post_transaction( array $data, string $post_slug ): ?int {
 		$post_data = [
 			'post_title'   => $this->sanitize_title( $data['post_title'] ?? $data['title'] ?? '' ),
-			'post_content' => $data['post_content'] ?? $data['content'] ?? '',
+			'post_content' => '', // Wird vom Page Builder gesetzt
 			'post_excerpt' => $data['post_excerpt'] ?? $data['excerpt'] ?? '',
 			'post_name'    => $post_slug,
 			'post_status'  => $this->config['post_status'] ?? 'draft',
@@ -271,7 +271,7 @@ class CSV_Import_Pro_Run {
         $template_content = $this->template_post->post_content;
         $template_meta = get_post_meta( $this->template_post->ID );
 
-        // Platzhalter in Inhalten und Meta-Feldern ersetzen
+        // Globale Ersetzungsfunktion für Strings
         $replacer = function( $value ) use ( $data ) {
             if ( ! is_string( $value ) ) return $value;
             foreach ( $data as $key => $csv_value ) {
@@ -279,66 +279,69 @@ class CSV_Import_Pro_Run {
             }
             return $value;
         };
+        
+        // Globale Ersetzungsfunktion für JSON-Strukturen (rekursiv)
+        $json_replacer = function( &$item ) use ( $data, &$json_replacer ) {
+            if ( is_string( $item ) ) {
+                foreach ( $data as $key => $csv_value ) {
+                    $item = str_replace( '{{' . $key . '}}', $csv_value, $item );
+                }
+            } elseif ( is_array( $item ) ) {
+                foreach ( $item as &$value ) {
+                    $json_replacer( $value );
+                }
+            }
+        };
 
-        $final_content = $replacer( $template_content );
-        foreach ( $template_meta as $meta_key => $meta_value ) {
-            // Nur einzelne Meta-Werte (Arrays werden komplexer behandelt)
-            if ( isset( $meta_value[0] ) ) {
-                update_post_meta( $post_id, $meta_key, $replacer( maybe_unserialize( $meta_value[0] ) ) );
+        // Standard-Meta-Felder vom Template auf den neuen Post übertragen
+        foreach ( $template_meta as $meta_key => $meta_values ) {
+            if ( isset( $meta_values[0] ) ) {
+                $unserialized_value = maybe_unserialize( $meta_values[0] );
+                // Platzhalter ersetzen, falls es ein String ist
+                if ( is_string( $unserialized_value ) ) {
+                    update_post_meta( $post_id, $meta_key, $replacer( $unserialized_value ) );
+                } else {
+                    update_post_meta( $post_id, $meta_key, $unserialized_value );
+                }
             }
         }
+
+        $final_content = $replacer( $template_content );
 
         // Page-Builder-spezifische Logik
         switch ( $page_builder ) {
             case 'elementor':
-                // Elementor speichert seine Daten hauptsächlich im Meta-Feld `_elementor_data`.
-                // Dieses muss nach dem Ersetzen der Platzhalter aktualisiert werden.
                 if ( isset( $template_meta['_elementor_data'][0] ) ) {
-                    $elementor_data = $replacer( $template_meta['_elementor_data'][0] );
-                    update_post_meta( $post_id, '_elementor_data', wp_slash( $elementor_data ) );
+                    $elementor_data_string = $replacer( $template_meta['_elementor_data'][0] );
+                    update_post_meta( $post_id, '_elementor_data', wp_slash( $elementor_data_string ) );
+                }
+                update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
+                break;
+
+            case 'breakdance':
+                // Breakdance speichert Daten als JSON im post_content.
+                $json_data = json_decode( $template_content, true );
+                if ( json_last_error() === JSON_ERROR_NONE ) {
+                    $json_replacer( $json_data );
+                    $final_content = wp_slash( json_encode( $json_data, JSON_UNESCAPED_UNICODE ) );
+                }
+                // Meta-Feld, um Breakdance zu aktivieren
+                update_post_meta( $post_id, '_breakdance_is_editable', '1' );
+                break;
+
+            case 'enfold':
+                // Enfold speichert Shortcodes im post_content. Die Standard-Ersetzung ist ausreichend.
+                // Wichtig ist das Meta-Feld, um den "Advanced Layout Builder" zu aktivieren.
+                update_post_meta( $post_id, '_av_alb_advanced_layout_status', 'active' );
+                if ( isset( $template_meta['_aviaLayoutBuilder_active'][0] ) ) {
+                     update_post_meta( $post_id, '_aviaLayoutBuilder_active', 'active' );
                 }
                 break;
 
             case 'wpbakery':
-                // WPBakery verwendet Shortcodes im `post_content`. Die Ersetzung dort ist meist ausreichend.
-                // Zusätzliche CSS-Stile könnten in `_wpb_post_custom_css` gespeichert sein.
-                if ( isset( $template_meta['_wpb_post_custom_css'][0] ) ) {
-                    update_post_meta( $post_id, '_wpb_post_custom_css', $replacer( $template_meta['_wpb_post_custom_css'][0] ) );
-                }
-                break;
-
-            case 'breakdance':
-                // FÜR BREAKDANCE:
-                // 1. Finden Sie heraus, wie Breakdance seine Daten speichert (z.B. in post_content oder Meta-Feldern wie `breakdance_data`).
-                // 2. Ersetzen Sie hier die Platzhalter in den entsprechenden Daten.
-                // Beispiel (Annahme, die Daten sind in einem Meta-Feld):
-                /*
-                if ( isset( $template_meta['breakdance_data'][0] ) ) {
-                    $breakdance_data = json_decode( $replacer( $template_meta['breakdance_data'][0] ), true );
-                    update_post_meta( $post_id, 'breakdance_data', $breakdance_data );
-                }
-                */
-                // Breakdance verwendet oft ein JSON-Format im post_content. Dieses müsste hier aktualisiert werden.
-                // $post_data['post_content'] = json_encode( $some_array_with_replaced_values );
-                // update_post_field( 'post_content', $post_data['post_content'], $post_id );
-                break;
-
-            case 'enfold':
-                // FÜR ENFOLD:
-                // 1. Enfold nutzt den "Advanced Layout Builder" (ALB), der seine Daten als Shortcodes im `post_content` speichert.
-                // 2. Die Standard-Ersetzung im `post_content` sollte hier bereits gut funktionieren.
-                // 3. Überprüfen Sie, ob Enfold zusätzliche Meta-Felder für Layout-Optionen verwendet (z.B. `_layout`, `_av_alb_advanced_layout_status`).
-                // Beispiel:
-                /*
-                if ( isset( $template_meta['_layout'][0] ) ) {
-                    update_post_meta( $post_id, '_layout', $replacer( $template_meta['_layout'][0] ) );
-                }
-                */
-                break;
-
             case 'gutenberg':
             default:
-                // Für Gutenberg und den Standard-Editor wird der post_content aktualisiert.
+                // Für diese Builder ist das Ersetzen der Platzhalter im `post_content` ausreichend.
                 break;
         }
         
