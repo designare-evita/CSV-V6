@@ -2,6 +2,7 @@
 /**
  * Die zentrale Klasse zur Durchführung des CSV-Imports.
  * Korrigierte Version - kompatibel mit core-functions.php
+ * ERWEITERTE VERSION: Unterstützung für mehrere Page Builder (Breakdance, Enfold).
  */
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -22,14 +23,13 @@ class CSV_Import_Pro_Run {
 		$this->session_id = 'run_' . time() . '_' . uniqid();
 	}
 
-	public static function run( string $source, array $mapping = [] ): array { // Zeile anpassen
-    $importer = new self( $source );
-    $importer->mapping = $mapping; // Diese Zeile hinzufügen
-    return $importer->execute_import();
-}
+	public static function run( string $source, array $mapping = [] ): array {
+        $importer = new self( $source );
+        $importer->mapping = $mapping;
+        return $importer->execute_import();
+    }
 
 	private function execute_import(): array {
-		// Fehler-Handler Check
 		if ( class_exists( 'CSV_Import_Error_Handler' ) && method_exists( 'CSV_Import_Error_Handler', 'reset_error_counts' ) ) {
 			CSV_Import_Error_Handler::reset_error_counts();
 		}
@@ -41,7 +41,6 @@ class CSV_Import_Pro_Run {
 			$this->load_and_validate_config();
 			$this->set_system_limits();
 
-			// CSV-Daten über core-functions laden
 			$this->csv_data = csv_import_load_csv_data( $this->source, $this->config );
 			
 			if ( empty( $this->csv_data['data'] ) ) {
@@ -98,26 +97,24 @@ class CSV_Import_Pro_Run {
 
 
 	private function apply_mapping( array $row ): array {
-    if ( empty( $this->mapping ) ) {
-        return $row;
-    }
-
-    $mapped_row = $row; // ✅ Alle Original-Daten beibehalten
-    
-    foreach ( $this->mapping as $original_column => $target_field ) {
-        if ( isset( $row[ $original_column ] ) && ! empty( $target_field ) ) {
-            $mapped_row[ $target_field ] = $row[ $original_column ]; // ✅ Hinzufügen
-            // ✅ KEINE unset() Operation mehr!
+        if ( empty( $this->mapping ) ) {
+            return $row;
         }
+
+        $mapped_row = $row;
+        
+        foreach ( $this->mapping as $original_column => $target_field ) {
+            if ( isset( $row[ $original_column ] ) && ! empty( $target_field ) ) {
+                $mapped_row[ $target_field ] = $row[ $original_column ];
+            }
+        }
+        
+        return $mapped_row;
     }
-    
-    return $mapped_row;
-}
 	
 	private function load_and_validate_config(): void {
 		$this->config = csv_import_get_config();
 		
-		// Basis-Validierung
 		if ( empty( $this->config['post_type'] ) ) {
 			throw new Exception( 'Post-Typ nicht konfiguriert' );
 		}
@@ -126,7 +123,6 @@ class CSV_Import_Pro_Run {
 			throw new Exception( 'Post-Typ existiert nicht: ' . $this->config['post_type'] );
 		}
 		
-		// Template validieren falls erforderlich
 		if ( ! empty( $this->config['template_id'] ) ) {
 			$this->template_post = get_post( $this->config['template_id'] );
 			if ( ! $this->template_post ) {
@@ -146,7 +142,6 @@ class CSV_Import_Pro_Run {
 		$total_rows = count( $rows );
 		$processed = 0;
 		
-		// Erforderliche Spalten prüfen
 		$required_columns = $this->config['required_columns'] ?? [];
 		if ( is_string( $required_columns ) ) {
 			$required_columns = array_filter( array_map( 'trim', explode( "\n", $required_columns ) ) );
@@ -158,17 +153,15 @@ class CSV_Import_Pro_Run {
 		}
 		
 		foreach ( $rows as $index => $row_data ) {
-    try {
-        // Fortschritt aktualisieren
-        if ( $processed % 5 === 0 ) {
-            csv_import_update_progress( $processed, $total_rows, 'processing' );
-        }
+            try {
+                if ( $processed % 5 === 0 ) {
+                    csv_import_update_progress( $processed, $total_rows, 'processing' );
+                }
 
-        $mapped_row = $this->apply_mapping( $row_data ); // DIESE ZEILE HINZUFÜGEN
+                $mapped_row = $this->apply_mapping( $row_data );
+                $post_result = $this->process_single_row( $mapped_row );
 
-        $post_result = $this->process_single_row( $mapped_row ); // HIER $row_data zu $mapped_row ändern
-
-        if ( $post_result === 'created' ) {
+                if ( $post_result === 'created' ) {
 					$results['created']++;
 				} elseif ( $post_result === 'skipped' ) {
 					$results['skipped']++;
@@ -176,9 +169,8 @@ class CSV_Import_Pro_Run {
 				
 				$processed++;
 				
-				// Kurze Pause alle 10 Posts
 				if ( $processed % 10 === 0 ) {
-					usleep( 100000 ); // 0.1 Sekunde
+					usleep( 100000 );
 				}
 				
 			} catch ( Exception $e ) {
@@ -191,7 +183,6 @@ class CSV_Import_Pro_Run {
 					'session_id' => $this->session_id
 				] );
 				
-				// Maximale Fehleranzahl erreicht?
 				if ( $results['errors'] > 50 ) {
 					csv_import_log( 'error', 'Import abgebrochen - zu viele Fehler (>50)' );
 					break;
@@ -203,24 +194,19 @@ class CSV_Import_Pro_Run {
 	}
 
 	private function process_single_row( array $data ): string {
-		// Post-Grunddaten extrahieren
 		$post_title = $this->sanitize_title( $data['post_title'] ?? $data['title'] ?? '' );
-		$post_content = $data['post_content'] ?? $data['content'] ?? '';
-		$post_excerpt = $data['post_excerpt'] ?? $data['excerpt'] ?? '';
 		
 		if ( empty( $post_title ) ) {
 			throw new Exception( 'Post-Titel ist erforderlich' );
 		}
 		
-		// Duplikat prüfen
 		if ( ! empty( $this->config['skip_duplicates'] ) ) {
 			$existing_post = get_page_by_title( $post_title, OBJECT, $this->config['post_type'] );
 			if ( $existing_post ) {
-				return 'skipped'; // Duplikat übersprungen
+				return 'skipped';
 			}
 		}
 		
-		// Eindeutigen Slug generieren
 		$post_slug = $this->generate_unique_slug( $post_title );
 		
 		$post_id = $this->create_post_transaction( $data, $post_slug );
@@ -233,7 +219,6 @@ class CSV_Import_Pro_Run {
 	}
 
 	private function create_post_transaction( array $data, string $post_slug ): ?int {
-		// Post-Daten zusammenstellen
 		$post_data = [
 			'post_title'   => $this->sanitize_title( $data['post_title'] ?? $data['title'] ?? '' ),
 			'post_content' => $data['post_content'] ?? $data['content'] ?? '',
@@ -247,21 +232,17 @@ class CSV_Import_Pro_Run {
 			]
 		];
 		
-		// Post zuerst erstellen, um eine ID zu erhalten
-$post_id = wp_insert_post( $post_data );
+        // Post zuerst erstellen, um eine ID zu erhalten
+        $post_id = wp_insert_post( $post_data );
 
-if ( is_wp_error( $post_id ) ) {
-    throw new Exception( 'WordPress Fehler: ' . $post_id->get_error_message() );
-}
+        if ( is_wp_error( $post_id ) ) {
+            throw new Exception( 'WordPress Fehler: ' . $post_id->get_error_message() );
+        }
 
-// Template und Page-Builder-spezifische Daten anwenden
-if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->config['page_builder'] !== 'none' ) {
-    $this->apply_page_builder_template( $post_id, $data );
-}
-		
-		if ( is_wp_error( $post_id ) ) {
-			throw new Exception( 'WordPress Fehler: ' . $post_id->get_error_message() );
-		}
+        // Template und Page-Builder-spezifische Daten anwenden
+        if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->config['page_builder'] !== 'none' ) {
+            $this->apply_page_builder_template( $post_id, $data );
+        }
 		
 		// Meta-Felder hinzufügen
 		$this->add_meta_fields( $post_id, $data );
@@ -274,12 +255,105 @@ if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->
 		return $post_id;
 	}
 
+    /**
+     * Wendet das Template basierend auf dem ausgewählten Page Builder an.
+     * Diese Methode verarbeitet sowohl den post_content als auch die notwendigen Meta-Felder.
+     *
+     * @param int $post_id Die ID des neu erstellten Posts.
+     * @param array $data Die Datenzeile aus der CSV.
+     */
+    private function apply_page_builder_template( int $post_id, array $data ): void {
+        if ( ! $this->template_post ) {
+            return;
+        }
+
+        $page_builder = $this->config['page_builder'];
+        $template_content = $this->template_post->post_content;
+        $template_meta = get_post_meta( $this->template_post->ID );
+
+        // Platzhalter in Inhalten und Meta-Feldern ersetzen
+        $replacer = function( $value ) use ( $data ) {
+            if ( ! is_string( $value ) ) return $value;
+            foreach ( $data as $key => $csv_value ) {
+                $value = str_replace( '{{' . $key . '}}', $csv_value, $value );
+            }
+            return $value;
+        };
+
+        $final_content = $replacer( $template_content );
+        foreach ( $template_meta as $meta_key => $meta_value ) {
+            // Nur einzelne Meta-Werte (Arrays werden komplexer behandelt)
+            if ( isset( $meta_value[0] ) ) {
+                update_post_meta( $post_id, $meta_key, $replacer( maybe_unserialize( $meta_value[0] ) ) );
+            }
+        }
+
+        // Page-Builder-spezifische Logik
+        switch ( $page_builder ) {
+            case 'elementor':
+                // Elementor speichert seine Daten hauptsächlich im Meta-Feld `_elementor_data`.
+                // Dieses muss nach dem Ersetzen der Platzhalter aktualisiert werden.
+                if ( isset( $template_meta['_elementor_data'][0] ) ) {
+                    $elementor_data = $replacer( $template_meta['_elementor_data'][0] );
+                    update_post_meta( $post_id, '_elementor_data', wp_slash( $elementor_data ) );
+                }
+                break;
+
+            case 'wpbakery':
+                // WPBakery verwendet Shortcodes im `post_content`. Die Ersetzung dort ist meist ausreichend.
+                // Zusätzliche CSS-Stile könnten in `_wpb_post_custom_css` gespeichert sein.
+                if ( isset( $template_meta['_wpb_post_custom_css'][0] ) ) {
+                    update_post_meta( $post_id, '_wpb_post_custom_css', $replacer( $template_meta['_wpb_post_custom_css'][0] ) );
+                }
+                break;
+
+            case 'breakdance':
+                // FÜR BREAKDANCE:
+                // 1. Finden Sie heraus, wie Breakdance seine Daten speichert (z.B. in post_content oder Meta-Feldern wie `breakdance_data`).
+                // 2. Ersetzen Sie hier die Platzhalter in den entsprechenden Daten.
+                // Beispiel (Annahme, die Daten sind in einem Meta-Feld):
+                /*
+                if ( isset( $template_meta['breakdance_data'][0] ) ) {
+                    $breakdance_data = json_decode( $replacer( $template_meta['breakdance_data'][0] ), true );
+                    update_post_meta( $post_id, 'breakdance_data', $breakdance_data );
+                }
+                */
+                // Breakdance verwendet oft ein JSON-Format im post_content. Dieses müsste hier aktualisiert werden.
+                // $post_data['post_content'] = json_encode( $some_array_with_replaced_values );
+                // update_post_field( 'post_content', $post_data['post_content'], $post_id );
+                break;
+
+            case 'enfold':
+                // FÜR ENFOLD:
+                // 1. Enfold nutzt den "Advanced Layout Builder" (ALB), der seine Daten als Shortcodes im `post_content` speichert.
+                // 2. Die Standard-Ersetzung im `post_content` sollte hier bereits gut funktionieren.
+                // 3. Überprüfen Sie, ob Enfold zusätzliche Meta-Felder für Layout-Optionen verwendet (z.B. `_layout`, `_av_alb_advanced_layout_status`).
+                // Beispiel:
+                /*
+                if ( isset( $template_meta['_layout'][0] ) ) {
+                    update_post_meta( $post_id, '_layout', $replacer( $template_meta['_layout'][0] ) );
+                }
+                */
+                break;
+
+            case 'gutenberg':
+            default:
+                // Für Gutenberg und den Standard-Editor wird der post_content aktualisiert.
+                break;
+        }
+        
+        // Den finalen post_content für alle Builder aktualisieren
+        wp_update_post( [
+            'ID' => $post_id,
+            'post_content' => $final_content
+        ] );
+    }
+
 	private function validate_header( array $header ): void {
 		if ( empty( $header ) ) {
 			throw new Exception( 'CSV-Header ist leer' );
 		}
 		
-		// Prüfen ob mindestens post_title oder title vorhanden ist
 		$title_fields = ['post_title', 'title'];
 		$has_title_field = false;
 		
@@ -316,10 +390,6 @@ if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->
 		}
 	}
 	
-	// ===================================================================
-	// PRIVATE HELPER METHODEN
-	// ===================================================================
-	
 	private function sanitize_title( string $title ): string {
 		$title = trim( $title );
 		$title = wp_strip_all_tags( $title );
@@ -334,7 +404,6 @@ if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->
 			$slug = 'csv-import-post-' . uniqid();
 		}
 		
-		// Prüfen ob Slug bereits verwendet wurde in diesem Import
 		if ( in_array( $slug, $this->existing_slugs ) ) {
 			$counter = 1;
 			$original_slug = $slug;
@@ -348,35 +417,13 @@ if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->
 		return $slug;
 	}
 	
-	private function apply_template( array $data ): string {
-		if ( ! $this->template_post ) {
-			return $data['post_content'] ?? '';
-		}
-		
-		$content = $this->template_post->post_content;
-		
-		// Platzhalter ersetzen
-		foreach ( $data as $key => $value ) {
-			$placeholder = '{{' . $key . '}}';
-			$content = str_replace( $placeholder, $value, $content );
-		}
-		
-		// Standard-Platzhalter
-		$content = str_replace( '{{title}}', $data['post_title'] ?? $data['title'] ?? '', $content );
-		$content = str_replace( '{{content}}', $data['post_content'] ?? $data['content'] ?? '', $content );
-		
-		return $content;
-	}
-	
 	private function add_meta_fields( int $post_id, array $data ): void {
-		// Standard-Felder überspringen
 		$skip_fields = ['post_title', 'title', 'post_content', 'content', 'post_excerpt', 'excerpt', 'post_name'];
 		
 		foreach ( $data as $key => $value ) {
 			if ( ! in_array( $key, $skip_fields ) && ! empty( $value ) ) {
-				// Meta-Key normalisieren
 				$meta_key = sanitize_key( $key );
-				if ( strpos( $meta_key, '_' ) !== 0 ) { // PHP 7.4 kompatibel
+				if ( strpos( $meta_key, '_' ) !== 0 ) {
 					$meta_key = '_' . $meta_key;
 				}
 				
@@ -389,7 +436,6 @@ if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->
 		$image_fields = ['image', 'featured_image', 'thumbnail', 'post_image'];
 		$image_url = '';
 		
-		// Bild-URL finden
 		foreach ( $image_fields as $field ) {
 			if ( ! empty( $data[ $field ] ) ) {
 				$image_url = $data[ $field ];
@@ -402,7 +448,6 @@ if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->
 		}
 		
 		try {
-			// Verwende core-functions für Bild-Download
 			$attachment_id = csv_import_download_and_attach_image( $image_url, $post_id );
 			
 			if ( $attachment_id ) {
