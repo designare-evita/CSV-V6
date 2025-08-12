@@ -126,7 +126,7 @@ if (defined('WP_DEBUG') && WP_DEBUG && current_user_can('manage_options')) {
 
 /**
  * View-Datei für die Scheduling Seite.
- * NEUE VERSION: Modernes Grid-Layout, angepasst an das Haupt-Dashboard.
+ * KORRIGIERTE VERSION: Verbesserte Log-Level-Interpretation
  */
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -310,15 +310,37 @@ if ( ! defined( 'ABSPATH' ) ) {
 								<tr>
 									<td><?php echo esc_html( mysql2date( 'd.m.Y H:i:s', $import['time'] ?? '' ) ); ?></td>
 									<td>
-										<?php if ( ($import['level'] ?? 'error') === 'info' ) : ?>
+										<?php 
+										// ===================================================================
+										// KORRIGIERTE LOG-LEVEL-INTERPRETATION
+										// Standard ist jetzt 'info' statt 'error'
+										// ===================================================================
+										$log_level = $import['level'] ?? 'info'; // GEÄNDERT: Standard ist 'info'
+										
+										// Erfolgs-Level (info, debug, success)
+										if ( in_array( $log_level, ['info', 'debug', 'success'] ) ) : ?>
 											<span class="status-indicator status-success" style="padding: 3px 6px;">Erfolg</span>
-										<?php elseif ( ($import['level'] ?? 'error') === 'warning' ) : ?>
+										<?php elseif ( $log_level === 'warning' ) : ?>
 											<span class="status-indicator status-pending" style="padding: 3px 6px;">Warnung</span>
-										<?php else : ?>
+										<?php elseif ( in_array( $log_level, ['error', 'critical'] ) ) : ?>
 											<span class="status-indicator status-error" style="padding: 3px 6px;">Fehler</span>
+										<?php else : ?>
+											<!-- Fallback für unbekannte Level - zeige als Erfolg -->
+											<span class="status-indicator status-success" style="padding: 3px 6px;">Erfolg</span>
 										<?php endif; ?>
 									</td>
-									<td><?php echo esc_html( $import['message'] ?? '' ); ?></td>
+									<td>
+										<?php 
+										// Nachricht anzeigen mit Schutz vor XSS
+										$message = $import['message'] ?? 'Keine Nachricht verfügbar';
+										echo esc_html( $message );
+										
+										// Debug-Info bei WP_DEBUG (nur für Admins)
+										if ( defined('WP_DEBUG') && WP_DEBUG && current_user_can('manage_options') ) {
+											echo '<br><small style="color: #666;">Debug: Level=' . esc_html($log_level) . '</small>';
+										}
+										?>
+									</td>
 								</tr>
 							<?php endforeach; ?>
 						</tbody>
