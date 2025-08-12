@@ -1,28 +1,57 @@
 <?php
-
-// QUICK FIX: Scheduler-Historie korrekt laden
+// OPTIMIERTER QUICK FIX: Scheduler-Historie mit verbesserter Erkennung
 if (empty($scheduled_imports)) {
-    // Alle verfügbaren Log-Quellen sammeln
     $history = [];
     
-    // Error Handler Logs durchsuchen
+    // 1. Error Handler Logs durchsuchen
     if (class_exists('CSV_Import_Error_Handler')) {
         $error_logs = CSV_Import_Error_Handler::get_persistent_errors();
         if (is_array($error_logs)) {
             foreach ($error_logs as $log) {
                 if (isset($log['message'])) {
                     $msg = strtolower($log['message']);
-                    // Breite Kriterien für Import-Logs
-                    if (strpos($msg, 'import') !== false && 
-                        (strpos($msg, 'gestartet') !== false || 
-                         strpos($msg, 'erfolgreich') !== false ||
-                         strpos($msg, 'abgeschlossen') !== false ||
-                         (isset($log['user_id']) && $log['user_id'] == 0))) {
+                    $original_msg = $log['message'];
+                    
+                    // Erweiterte Kriterien für Import-Logs
+                    $is_import_log = false;
+                    
+                    // Direkte Scheduler-Keywords
+                    if (strpos($msg, 'geplant') !== false || 
+                        strpos($msg, 'scheduled') !== false || 
+                        strpos($msg, 'automatisch') !== false ||
+                        strpos($msg, 'cron') !== false) {
+                        $is_import_log = true;
+                    }
+                    
+                    // Import-Keywords mit zusätzlichen Indikatoren
+                    if (strpos($msg, 'import') !== false) {
+                        // System-User (automatische Imports)
+                        if (isset($log['user_id']) && $log['user_id'] == 0) {
+                            $is_import_log = true;
+                        }
                         
+                        // Import-Status-Keywords
+                        if (strpos($msg, 'gestartet') !== false || 
+                            strpos($msg, 'erfolgreich') !== false ||
+                            strpos($msg, 'abgeschlossen') !== false ||
+                            strpos($msg, 'verarbeitet') !== false ||
+                            strpos($msg, 'completed') !== false) {
+                            $is_import_log = true;
+                        }
+                        
+                        // Session-IDs die auf Scheduler hinweisen
+                        if (strpos($original_msg, 'scheduled_') !== false ||
+                            strpos($original_msg, 'auto_') !== false ||
+                            strpos($original_msg, 'cron_') !== false) {
+                            $is_import_log = true;
+                        }
+                    }
+                    
+                    if ($is_import_log) {
                         $history[] = [
-                            'time' => $log['time'] ?? date('Y-m-d H:i:s'),
+                            'time' => $log['time'] ?? $log['timestamp'] ?? date('Y-m-d H:i:s'),
                             'level' => $log['level'] ?? 'info',
-                            'message' => $log['message']
+                            'message' => $original_msg
                         ];
                     }
                 }
@@ -30,26 +59,71 @@ if (empty($scheduled_imports)) {
         }
     }
     
-    // Letzte Import-Statistiken hinzufügen
+    // 2. Letzte Import-Statistiken hinzufügen (falls verfügbar)
     $last_run = get_option('csv_import_last_run');
     $last_count = get_option('csv_import_last_count', 0);
     $last_source = get_option('csv_import_last_source', 'Unbekannt');
     
     if ($last_run && $last_count > 0) {
+        // Prüfen ob dieser Import-Eintrag nicht bereits in den Logs vorhanden ist
+        $already_exists = false;
+        foreach ($history as $existing) {
+            if (abs(strtotime($existing['time']) - strtotime($last_run)) < 60) { // Innerhalb 1 Minute
+                $already_exists = true;
+                break;
+            }
+        }
+        
+        if (!$already_exists) {
+            $history[] = [
+                'time' => $last_run,
+                'level' => 'info',
+                'message' => "Import erfolgreich abgeschlossen: {$last_count} Einträge verarbeitet (Quelle: {$last_source})"
+            ];
+        }
+    }
+    
+    // 3. WordPress Cron-Events prüfen (falls noch geplant)
+    $next_scheduled = wp_next_scheduled('csv_import_scheduled');
+    if ($next_scheduled && empty($history)) {
         $history[] = [
-            'time' => $last_run,
-            'level' => 'info',
-            'message' => "Import erfolgreich abgeschlossen: {$last_count} Einträge verarbeitet (Quelle: {$last_source})"
+            'time' => date('Y-m-d H:i:s'),
+            'level' => 'info', 
+            'message' => 'Scheduler ist aktiv - Nächster automatischer Import geplant für ' . date('d.m.Y H:i:s', $next_scheduled)
         ];
     }
     
-    // Sortieren und begrenzen
-    usort($history, function($a, $b) {
-        return strtotime($b['time']) - strtotime($a['time']);
-    });
+    // 4. Fallback: Wenn immer noch leer, zeige Scheduler-Status
+    if (empty($history) && !empty($is_scheduled)) {
+        $history[] = [
+            'time' => date('Y-m-d H:i:s'),
+            'level' => 'info',
+            'message' => 'Automatischer Import-Scheduler ist konfiguriert und aktiv'
+        ];
+    }
     
-    $scheduled_imports = array_slice($history, 0, 20);
+    // Sortieren (neueste zuerst) und begrenzen
+    if (!empty($history)) {
+        usort($history, function($a, $b) {
+            return strtotime($b['time']) - strtotime($a['time']);
+        });
+        
+        $scheduled_imports = array_slice($history, 0, 20);
+    }
 }
+
+// Debug-Information (nur bei WP_DEBUG anzeigen)
+if (defined('WP_DEBUG') && WP_DEBUG && current_user_can('manage_options')) {
+    $debug_info = [
+        'found_logs' => count($scheduled_imports ?? []),
+        'error_handler_available' => class_exists('CSV_Import_Error_Handler'),
+        'last_run_available' => !empty(get_option('csv_import_last_run')),
+        'scheduler_active' => !empty($is_scheduled),
+        'next_scheduled' => wp_next_scheduled('csv_import_scheduled')
+    ];
+    echo '<!-- CSV Import Scheduler Debug: ' . esc_html(print_r($debug_info, true)) . ' -->';
+}
+
 /**
  * View-Datei für die Scheduling Seite.
  * NEUE VERSION: Modernes Grid-Layout, angepasst an das Haupt-Dashboard.
@@ -205,7 +279,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 			</form>
 		</div>
 
-		<div class="csv-import-box" style="grid-column: 1 / -1;"> <h3>
+		<div class="csv-import-box" style="grid-column: 1 / -1;">
+			<h3>
 				<span class="step-number">3</span>
 				<span class="step-icon">📊</span>
 				Scheduling-Historie
@@ -214,7 +289,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 			<div class="sample-data-container" style="max-height: 300px;">
 				<?php if ( empty( $scheduled_imports ) ) : ?>
 					<div class="info-message">
-						<strong>Info:</strong> Noch keine geplanten Imports ausgeführt.
+						<strong>Info:</strong> Noch keine automatischen Imports gefunden.
+						<?php if ( !empty( $is_scheduled ) ) : ?>
+							<br><small>Der Scheduler ist aktiv - Historie wird nach dem ersten automatischen Import angezeigt.</small>
+						<?php else : ?>
+							<br><small>Aktivieren Sie zunächst einen geplanten Import oben.</small>
+						<?php endif; ?>
 					</div>
 				<?php else : ?>
 					<table class="wp-list-table widefat fixed striped sample-data-table">
@@ -232,6 +312,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 									<td>
 										<?php if ( ($import['level'] ?? 'error') === 'info' ) : ?>
 											<span class="status-indicator status-success" style="padding: 3px 6px;">Erfolg</span>
+										<?php elseif ( ($import['level'] ?? 'error') === 'warning' ) : ?>
+											<span class="status-indicator status-pending" style="padding: 3px 6px;">Warnung</span>
 										<?php else : ?>
 											<span class="status-indicator status-error" style="padding: 3px 6px;">Fehler</span>
 										<?php endif; ?>
@@ -241,6 +323,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 							<?php endforeach; ?>
 						</tbody>
 					</table>
+					
+					<?php if ( defined('WP_DEBUG') && WP_DEBUG && current_user_can('manage_options') ) : ?>
+						<p class="description" style="margin-top: 10px;">
+							<strong>Debug:</strong> <?php echo count($scheduled_imports); ?> Einträge gefunden.
+							<?php if ( !empty($last_run) ) : ?>
+								Letzter Import: <?php echo esc_html($last_run); ?>.
+							<?php endif; ?>
+						</p>
+					<?php endif; ?>
 				<?php endif; ?>
 			</div>
 		</div>
