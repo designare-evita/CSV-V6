@@ -247,13 +247,17 @@ class CSV_Import_Pro_Run {
 			]
 		];
 		
-		// Template anwenden falls vorhanden
-		if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->config['page_builder'] !== 'none' ) {
-			$post_data['post_content'] = $this->apply_template( $data );
-		}
-		
-		// Post erstellen
-		$post_id = wp_insert_post( $post_data );
+		// Post zuerst erstellen, um eine ID zu erhalten
+$post_id = wp_insert_post( $post_data );
+
+if ( is_wp_error( $post_id ) ) {
+    throw new Exception( 'WordPress Fehler: ' . $post_id->get_error_message() );
+}
+
+// Template und Page-Builder-spezifische Daten anwenden
+if ( $this->template_post && ! empty( $this->config['page_builder'] ) && $this->config['page_builder'] !== 'none' ) {
+    $this->apply_page_builder_template( $post_id, $data );
+}
 		
 		if ( is_wp_error( $post_id ) ) {
 			throw new Exception( 'WordPress Fehler: ' . $post_id->get_error_message() );
