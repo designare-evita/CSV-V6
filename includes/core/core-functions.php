@@ -610,135 +610,127 @@ function csv_import_analyze_csv_content( string $csv_content, string $source_nam
 }
 
 // ===================================================================
-// CSV VERARBEITUNGSFUNKTIONEN
+// CSV VERARBEITUNGSFUNKTIONEN (OPTIMIERT FÜR GERINGEN SPEICHERVERBRAUCH)
 // ===================================================================
 
 /**
- * Lädt CSV-Daten von einer Quelle
+ * Lädt CSV-Daten von einer Quelle und verarbeitet sie als Stream.
  * @param string $source 'dropbox' oder 'local'
  * @param array $config Plugin-Konfiguration
  * @return array CSV-Daten als Array
  */
 function csv_import_load_csv_data( string $source, array $config ): array {
-    if ( $source === 'dropbox' ) {
-        return csv_import_load_dropbox_csv( $config );
-    } elseif ( $source === 'local' ) {
-        return csv_import_load_local_csv( $config );
-    } else {
-        throw new Exception( 'Unbekannte CSV-Quelle: ' . $source );
+    $file_handle = null;
+    $temp_file_path = null;
+
+    try {
+        if ( $source === 'dropbox' ) {
+            // Dropbox-Datei temporär auf dem Server speichern, um sie als Stream zu lesen
+            $temp_file_path = csv_import_download_dropbox_to_temp( $config );
+            $file_handle = fopen( $temp_file_path, 'r' );
+        } elseif ( $source === 'local' ) {
+            $file_path = ABSPATH . ltrim( $config['local_path'], '/' );
+            if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+                throw new Exception( 'Lokale CSV-Datei nicht gefunden oder nicht lesbar: ' . $config['local_path'] );
+            }
+            $file_handle = fopen( $file_path, 'r' );
+        } else {
+            throw new Exception( 'Unbekannte CSV-Quelle: ' . $source );
+        }
+
+        if ( $file_handle === false ) {
+            throw new Exception( 'Datei konnte nicht zum Lesen geöffnet werden.' );
+        }
+
+        // --- NEU: Die neue Streaming-Funktion aufrufen ---
+        return csv_import_process_csv_stream( $file_handle, $config );
+
+    } finally {
+        // Sicherstellen, dass der File Handle geschlossen und die temporäre Datei gelöscht wird
+        if ( is_resource( $file_handle ) ) {
+            fclose( $file_handle );
+        }
+        if ( $temp_file_path && file_exists( $temp_file_path ) ) {
+            @unlink( $temp_file_path );
+        }
     }
 }
 
 /**
- * Lädt CSV-Daten von Dropbox
+ * NEU: Lädt eine Dropbox-Datei in eine temporäre Datei und gibt den Pfad zurück.
  */
-function csv_import_load_dropbox_csv( array $config ): array {
+function csv_import_download_dropbox_to_temp( array $config ): string {
     if ( empty( $config['dropbox_url'] ) ) {
         throw new Exception( 'Dropbox URL nicht konfiguriert' );
     }
-    
-    // URL für direkten Download vorbereiten
-    $download_url = $config['dropbox_url'];
-    if ( strpos( $download_url, 'dropbox.com' ) !== false ) {
-        $download_url = str_replace( 'www.dropbox.com', 'dl.dropboxusercontent.com', $download_url );
-        $download_url = str_replace( 'dropbox.com', 'dl.dropboxusercontent.com', $download_url );
-        $download_url = str_replace( '?dl=0', '', $download_url );
-        $download_url = str_replace( '?dl=1', '', $download_url );
-        if ( strpos( $download_url, '?' ) === false ) {
-            $download_url .= '?raw=1';
-        }
+
+    $download_url = str_replace( '?dl=0', '?dl=1', $config['dropbox_url'] );
+
+    $temp_file = wp_tempnam( 'csv_import' );
+    if ( ! $temp_file ) {
+        throw new Exception( 'Konnte keine temporäre Datei erstellen.' );
     }
-    
+
     $response = wp_remote_get( $download_url, [
-        'timeout' => 60,
-        'headers' => [
-            'User-Agent' => 'CSV Import Pro/' . (defined('CSV_IMPORT_PRO_VERSION') ? CSV_IMPORT_PRO_VERSION : '5.1')
-        ]
+        'timeout'  => 60,
+        'stream'   => true, // Wichtig: Aktiviert Streaming-Download
+        'filename' => $temp_file
     ] );
-    
+
     if ( is_wp_error( $response ) ) {
-        throw new Exception( 'Dropbox-Datei konnte nicht geladen werden: ' . $response->get_error_message() );
+        @unlink( $temp_file );
+        throw new Exception( 'Dropbox-Download fehlgeschlagen: ' . $response->get_error_message() );
     }
     
-    $csv_content = wp_remote_retrieve_body( $response );
-    return csv_import_parse_csv_content( $csv_content );
+    $http_code = wp_remote_retrieve_response_code( $response );
+    if ( $http_code !== 200 ) {
+        @unlink( $temp_file );
+        throw new Exception( "Dropbox-Datei nicht verfügbar (HTTP {$http_code})" );
+    }
+
+    return $temp_file;
 }
 
-/**
- * Lädt CSV-Daten von lokaler Datei
- */
-function csv_import_load_local_csv( array $config ): array {
-    if ( empty( $config['local_path'] ) ) {
-        throw new Exception( 'Lokaler Pfad nicht konfiguriert' );
-    }
-    
-    $file_path = ABSPATH . ltrim( $config['local_path'], '/' );
-    
-    if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
-        throw new Exception( 'CSV-Datei nicht gefunden oder nicht lesbar: ' . $config['local_path'] );
-    }
-    
-    $csv_content = file_get_contents( $file_path );
-    if ( $csv_content === false ) {
-        throw new Exception( 'CSV-Datei konnte nicht gelesen werden' );
-    }
-    
-    return csv_import_parse_csv_content( $csv_content );
-}
 
 /**
- * Parst CSV-Inhalt in ein Array
+ * NEU & ERSETZT parse_csv_content: Verarbeitet einen CSV-Dateistream Zeile für Zeile.
+ *
+ * @param resource $file_handle Der geöffnete File Handle der CSV-Datei.
+ * @param array $config Die Plugin-Konfiguration.
+ * @return array Die geparsten CSV-Daten.
  */
-function csv_import_parse_csv_content( string $csv_content ): array {
-    if ( empty( trim( $csv_content ) ) ) {
-        throw new Exception( 'CSV-Inhalt ist leer' );
+function csv_import_process_csv_stream( $file_handle, array $config ): array {
+    // BOM (Byte Order Mark) überspringen, falls vorhanden (wichtig für UTF-8 Kompatibilität)
+    if (fgets($file_handle, 4) !== "\xef\xbb\xbf") {
+        rewind($file_handle);
     }
     
-    // Zeilenumbrüche normalisieren
-    $csv_content = csv_import_normalize_line_endings( $csv_content );
-    
-    // Trennzeichen aus den Einstellungen holen oder automatisch erkennen
-    $saved_delimiter = get_option( 'csv_import_delimiter', 'auto' );
-
-    if ( ! empty( $saved_delimiter ) && 'auto' !== $saved_delimiter ) {
-        // Manuell gesetztes Trennzeichen verwenden (Tabulator-Zeichen umwandeln)
-        $delimiter = str_replace( '\t', "\t", $saved_delimiter );
-    } else {
-        // Fallback auf automatische Erkennung
-        $delimiter = csv_import_detect_csv_delimiter( $csv_content );
+    // Header auslesen und Trennzeichen erkennen
+    $header_line = fgets( $file_handle );
+    if ($header_line === false) {
+        throw new Exception('Konnte die Header-Zeile nicht lesen. Die Datei ist möglicherweise leer.');
     }
     
-    // CSV in Zeilen aufteilen
-    $lines = str_getcsv( $csv_content, "\n" );
-    if ( empty( $lines ) ) {
-        throw new Exception( 'Keine CSV-Zeilen gefunden' );
-    }
-    
-    // Header-Zeile parsen
-    $headers = str_getcsv( $lines[0], $delimiter );
+    $delimiter = csv_import_detect_csv_delimiter($header_line);
+    $headers = str_getcsv( trim($header_line), $delimiter );
     $headers = array_map( 'trim', $headers );
-    
+
     if ( empty( array_filter( $headers ) ) ) {
-        throw new Exception( 'Keine gültigen Header gefunden' );
+        throw new Exception( 'Keine gültigen Spalten-Header gefunden.' );
     }
     
-    // Datenzeilen parsen
     $data = [];
-    for ( $i = 1; $i < count( $lines ); $i++ ) {
-        $line = trim( $lines[ $i ] );
-        if ( empty( $line ) ) {
-            continue; // Leere Zeilen überspringen
+    // Schleife, die die Datei Zeile für Zeile liest
+    while ( ( $row = fgetcsv( $file_handle, 0, $delimiter ) ) !== false ) {
+        // Ignoriere komplett leere Zeilen
+        if (count($row) === 1 && is_null($row[0])) {
+            continue;
         }
-        
-        $row = str_getcsv( $line, $delimiter );
-        $row = array_map( 'trim', $row );
-        
-        // Zeile mit Headern verknüpfen
+
         $row_data = [];
-        for ( $j = 0; $j < count( $headers ); $j++ ) {
-            $row_data[ $headers[ $j ] ] = $row[ $j ] ?? '';
+        foreach ( $headers as $index => $header ) {
+            $row_data[ $header ] = isset( $row[ $index ] ) ? trim( $row[ $index ] ) : '';
         }
-        
         $data[] = $row_data;
     }
     
@@ -750,21 +742,17 @@ function csv_import_parse_csv_content( string $csv_content ): array {
     ];
 }
 
+
 /**
- * Erkennt das CSV-Trennzeichen automatisch
+ * Erkennt das CSV-Trennzeichen automatisch aus der ersten Zeile.
  */
-function csv_import_detect_csv_delimiter( string $csv_content ): string {
-    $delimiters = [',', ';', "\t", '|'];
-    $line = strtok( $csv_content, "\n" ); // Erste Zeile holen
-    
-    $delimiter_count = [];
-    foreach ( $delimiters as $delimiter ) {
-        $delimiter_count[ $delimiter ] = substr_count( $line, $delimiter );
+function csv_import_detect_csv_delimiter( string $header_line ): string {
+    $delimiters = [',' => 0, ';' => 0, "\t" => 0, '|' => 0];
+    foreach ($delimiters as $delimiter => &$count) {
+        $count = count(str_getcsv($header_line, $delimiter));
     }
-    
-    // Trennzeichen mit den meisten Vorkommen wählen
-    arsort( $delimiter_count );
-    return array_key_first( $delimiter_count );
+    // Das Trennzeichen, das die meisten Spalten erzeugt, ist wahrscheinlich das richtige.
+    return array_search(max($delimiters), $delimiters);
 }
 
 // ===================================================================
