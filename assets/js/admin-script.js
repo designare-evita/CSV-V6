@@ -1,86 +1,322 @@
 /**
- * CSV Import Pro Admin JavaScript - Korrigierte Version 8.5
- * Mit vollständiger Scheduler-Integration und robuster Fehlerbehandlung
+ * CSV Import Pro Admin JavaScript - Korrigierte Version 8.6
+ * MIT ROBUSTERER VERBINDUNGSPRÜFUNG zur Vermeidung von Fehlalarmen.
  */
 
 // ===================================================================
-// GLOBALE FUNKTIONEN SOFORT DEFINIEREN (vor document ready!)
+// GLOBALE FUNKTIONEN (vor document ready!)
 // ===================================================================
 
-// STANDARD IMPORT-FUNKTIONEN
 window.csvImportTestConfig = function() {
-    console.log('csvImportTestConfig aufgerufen');
     if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.testConfiguration) {
         window.CSVImportAdmin.testConfiguration();
-    } else {
-        alert('Plugin noch nicht initialisiert. Bitte Seite neu laden.');
     }
 };
 
 window.csvImportValidateCSV = function(type) {
-    console.log('csvImportValidateCSV aufgerufen mit type:', type);
     if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.validateCSV) {
         window.CSVImportAdmin.validateCSV(type);
-    } else {
-        alert('Plugin noch nicht initialisiert. Bitte Seite neu laden.');
     }
 };
 
-// SCHEDULER-FUNKTIONEN (NEU IN VERSION 8.5)
-window.csvImportTestScheduler = function() {
-    console.log('csvImportTestScheduler aufgerufen');
-    if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.testScheduler) {
-        window.CSVImportAdmin.testScheduler();
-    } else {
-        alert('Scheduler-Funktionen nicht verfügbar. Plugin-Status prüfen.');
-    }
-};
+(function($) {
+    'use strict';
 
-window.csvImportGetSchedulerStatus = function() {
-    console.log('csvImportGetSchedulerStatus aufgerufen');
-    if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.getSchedulerStatus) {
-        window.CSVImportAdmin.getSchedulerStatus();
-    } else {
-        alert('Scheduler-Status-Funktionen nicht verfügbar.');
-    }
-};
+    const CSVImportAdmin = {
+        version: '8.6',
+        
+        debug: {
+            enabled: true,
+            log: function(message, data) {
+                if (!this.enabled) return;
+                console.log('🔧 CSV Import Admin:', message, data || '');
+            },
+            warn: function(message, data) {
+                if (!this.enabled) return;
+                console.warn('⚠️ CSV Import Admin:', message, data || '');
+            },
+            error: function(message, data) {
+                if (!this.enabled) return;
+                console.error('❌ CSV Import Admin:', message, data || '');
+            }
+        },
 
-window.csvImportDebugScheduler = function() {
-    console.log('csvImportDebugScheduler aufgerufen');
-    if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.debugScheduler) {
-        window.CSVImportAdmin.debugScheduler();
-    } else {
-        alert('Scheduler-Debug-Funktionen nicht verfügbar.');
-    }
-};
+        elements: {
+            resultsContainer: null,
+            sampleDataContainer: null,
+            importButtons: null,
+            progressNotice: null,
+            progressBar: null,
+        },
 
-// ERWEITERTE FUNKTIONEN (NEU IN VERSION 8.5)
-window.csvImportEmergencyReset = function() {
-    console.log('csvImportEmergencyReset aufgerufen');
-    if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.emergencyReset) {
-        window.CSVImportAdmin.emergencyReset();
-    } else {
-        alert('Emergency-Reset-Funktionen nicht verfügbar.');
-    }
-};
+        status: {
+            importRunning: false,
+            validationInProgress: false,
+            progressUpdateInterval: null,
+            connectionStatus: 'unknown',
+            // --- NEU: Zähler für Verbindungsfehler ---
+            connectionFailures: 0
+        },
 
-window.csvImportSystemHealth = function() {
-    console.log('csvImportSystemHealth aufgerufen (MANUELL)');
-    if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.systemHealthCheck) {
-        window.CSVImportAdmin.systemHealthCheck(true); // TRUE = Manueller Aufruf mit Pop-up
-    } else {
-        alert('System-Health-Funktionen nicht verfügbar.');
-    }
-};
+        config: {
+            progressUpdateInterval: 5000,
+            connectionCheckInterval: 15000, // Intervall verkürzt für schnellere Reaktion
+            // --- NEU: Schwellenwert für Verbindungsfehler ---
+            connectionFailureThreshold: 3, // erst nach 3 Fehlern wird die Verbindung als offline markiert
+        },
 
-window.csvImportCheckHandlers = function() {
-    console.log('csvImportCheckHandlers aufgerufen');
-    if (typeof window.CSVImportAdmin !== 'undefined' && window.CSVImportAdmin.checkHandlers) {
-        window.CSVImportAdmin.checkHandlers();
-    } else {
-        alert('Handler-Check-Funktionen nicht verfügbar.');
-    }
-};
+        state: {
+            initialized: false,
+        },
+
+        init: function() {
+            this.debug.log('Initialisiere Admin Interface v' + this.version);
+            if (typeof csvImportAjax === 'undefined') {
+                this.debug.error('csvImportAjax Object nicht verfügbar.');
+                return false;
+            }
+            this.cacheElements();
+            this.bindEvents();
+            this.initializeStatus();
+            this.startAutoUpdates();
+            this.state.initialized = true;
+            return true;
+        },
+
+        cacheElements: function() {
+            this.elements = {
+                resultsContainer: $('#csv-test-results'),
+                sampleDataContainer: $('#csv-sample-data-container'),
+                importButtons: $('.csv-import-btn'),
+                progressNotice: $('.csv-import-progress-notice'),
+                progressBar: $('.csv-import-progress-fill, .progress-bar-fill'),
+            };
+        },
+
+        bindEvents: function() {
+            const self = this;
+            this.elements.importButtons.on('click', function(e) {
+                e.preventDefault();
+                self.handleImportClick($(this));
+            });
+        },
+
+        initializeStatus: function() {
+            if (typeof csvImportAjax !== 'undefined') {
+                this.status.importRunning = csvImportAjax.import_running || false;
+            }
+            this.updateUIState();
+            this.checkConnection();
+        },
+
+        startAutoUpdates: function() {
+            if (this.status.importRunning) {
+                this.startProgressUpdates();
+            }
+            setInterval(() => {
+                this.checkConnection();
+            }, this.config.connectionCheckInterval);
+        },
+
+        performAjaxRequest: function(data, options = {}) {
+            const defaultOptions = {
+                url: csvImportAjax.ajaxurl,
+                type: 'POST',
+                data: $.extend({ nonce: csvImportAjax.nonce }, data),
+            };
+            return $.ajax($.extend(defaultOptions, options));
+        },
+        
+        /**
+         * Verbindung prüfen - JETZT MIT FEHLERZÄHLER
+         */
+        checkConnection: function() {
+            const self = this;
+            this.performAjaxRequest({ action: 'heartbeat' }, { timeout: 8000 })
+            .done(function() {
+                // --- GEÄNDERT: Fehlerzähler bei Erfolg zurücksetzen ---
+                if (self.status.connectionFailures > 0) {
+                    self.debug.log('Verbindung wiederhergestellt.');
+                }
+                self.status.connectionFailures = 0;
+                self.updateConnectionStatus('online');
+            })
+            .fail(function() {
+                // --- GEÄNDERT: Fehlerzähler bei Fehler erhöhen ---
+                self.status.connectionFailures++;
+                self.debug.warn(`Verbindungs-Check fehlgeschlagen (Fehler #${self.status.connectionFailures} von ${self.config.connectionFailureThreshold})`);
+                // Status nur aktualisieren, wenn der Schwellenwert erreicht ist
+                if (self.status.connectionFailures >= self.config.connectionFailureThreshold) {
+                    self.updateConnectionStatus('offline');
+                }
+            });
+        },
+
+        /**
+         * Connection-Status aktualisieren - JETZT MIT VERZÖGERTER WARNUNG
+         */
+        updateConnectionStatus: function(status) {
+            // Nichts tun, wenn sich der Status nicht geändert hat
+            if (this.status.connectionStatus === status) return;
+            
+            this.status.connectionStatus = status;
+            this.debug.log(`Connection-Status geändert zu: ${status}`);
+            
+            // UI-Indikatoren aktualisieren (falls vorhanden)
+            const indicator = $('.csv-connection-status');
+            if (indicator.length) {
+                indicator.removeClass('status-online status-offline').addClass(`status-${status}`);
+                indicator.find('.status-text').text(status === 'online' ? 'Verbunden' : 'Nicht verbunden');
+            }
+            
+            // --- GEÄNDERT: Warnung nur anzeigen, wenn der Status wirklich "offline" ist ---
+            if (status === 'offline') {
+                // Nur eine Warnung anzeigen, wenn nicht schon eine sichtbar ist
+                if ($('.csv-connection-error-notice').length === 0) {
+                    this.showGlobalError(
+                        'Verbindung zum Server verloren. Ihre Änderungen werden möglicherweise nicht gespeichert. Bitte prüfen Sie Ihre Internetverbindung.',
+                        'error', // Stärkerer Fehlertyp
+                        'csv-connection-error-notice' // Eindeutige Klasse
+                    );
+                }
+            } else if (status === 'online') {
+                // Bei Wiederverbindung die Fehlermeldung entfernen
+                $('.csv-connection-error-notice').fadeOut(function() { $(this).remove(); });
+            }
+        },
+        
+        handleImportClick: function($button) {
+            const source = $button.data('source');
+            if (!source || this.status.importRunning) return;
+            if (!confirm(`${source.charAt(0).toUpperCase() + source.slice(1)} Import wirklich starten?`)) return;
+            this.startImport(source);
+        },
+
+        startImport: function(source) {
+            this.status.importRunning = true;
+            this.updateUIState();
+            
+            const mappingData = {};
+            $('#csv-column-mapping-container select').each(function() {
+                const columnName = $(this).attr('name').replace(/csv_mapping\[|\]/g, '');
+                const targetField = $(this).val();
+                if (targetField) {
+                    mappingData[columnName] = targetField;
+                }
+            });
+
+            this.performAjaxRequest({ action: 'csv_import_start', source: source, mapping: mappingData })
+                .done(response => this.handleImportResult(response))
+                .fail(xhr => this.handleImportError(xhr))
+                .always(() => {
+                    this.status.importRunning = false;
+                    this.updateUIState();
+                });
+            this.startProgressUpdates();
+        },
+
+        handleImportResult: function(response) {
+            if (response.success) {
+                this.showAlert(response.data.message || 'Import erfolgreich!', 'success');
+                setTimeout(() => window.location.reload(), 2000);
+            } else {
+                this.showAlert(response.data.message || 'Import fehlgeschlagen.', 'error');
+            }
+        },
+
+        handleImportError: function(xhr) {
+            this.showAlert(`Ein Serverfehler ist aufgetreten (Status: ${xhr.status}). Der Import wurde möglicherweise abgebrochen.`, 'error');
+        },
+
+        startProgressUpdates: function() {
+            if (this.status.progressUpdateInterval) clearInterval(this.status.progressUpdateInterval);
+            this.status.progressUpdateInterval = setInterval(() => this.updateProgress(), this.config.progressUpdateInterval);
+            this.updateProgress();
+        },
+
+        stopProgressUpdates: function() {
+            if (this.status.progressUpdateInterval) {
+                clearInterval(this.status.progressUpdateInterval);
+                this.status.progressUpdateInterval = null;
+            }
+        },
+
+        updateProgress: function() {
+            if (!this.status.importRunning) {
+                this.stopProgressUpdates();
+                return;
+            }
+            this.performAjaxRequest({ action: 'csv_import_get_progress' })
+                .done(response => {
+                    if (response.success) {
+                        this.handleProgressUpdate(response.data);
+                    }
+                });
+        },
+
+        handleProgressUpdate: function(progress) {
+            if (!progress.running) {
+                this.status.importRunning = false;
+                this.updateUIState();
+            }
+            if (this.elements.progressNotice.length) {
+                this.elements.progressNotice.toggle(progress.running);
+                this.elements.progressNotice.find('.progress-message').text(progress.message);
+            }
+            if (this.elements.progressBar.length) {
+                this.elements.progressBar.css('width', progress.percent + '%');
+            }
+        },
+
+        updateUIState: function() {
+            this.elements.importButtons.prop('disabled', this.status.importRunning);
+            if (this.status.importRunning) {
+                this.elements.importButtons.text('Import läuft...');
+            } else {
+                this.elements.importButtons.each(function() {
+                    const source = $(this).data('source');
+                    $(this).text(`${source.charAt(0).toUpperCase() + source.slice(1)} Import starten`);
+                });
+            }
+        },
+
+        showAlert: function(message, type = 'info') {
+            alert(`[${type.toUpperCase()}] ${message}`);
+        },
+
+        /**
+         * Globalen Fehler anzeigen (erweitert mit optionaler CSS-Klasse)
+         */
+        showGlobalError: function(message, type = 'error', customClass = '') {
+            const errorHtml = `
+                <div class="notice notice-${type} is-dismissible ${customClass} global-csv-error">
+                    <p><strong>CSV Import Pro:</strong> ${message}</p>
+                    <button type="button" class="notice-dismiss" onclick="jQuery(this).closest('.notice').remove();">
+                        <span class="screen-reader-text">Dismiss this notice.</span>
+                    </button>
+                </div>
+            `;
+            
+            // Versuche, die Nachricht oben auf der Haupt-Admin-Seite anzuzeigen
+            if ($('.wrap > h1').length) {
+                $('.wrap > h1').first().after(errorHtml);
+            } else if ($('.wrap').length) {
+                $('.wrap').first().prepend(errorHtml);
+            } else {
+                $('#wpbody-content').prepend(errorHtml);
+            }
+        }
+    };
+
+    window.CSVImportAdmin = CSVImportAdmin;
+    
+    $(document).ready(function() {
+        if (typeof CSVImportAdmin !== 'undefined' && CSVImportAdmin.init) {
+            CSVImportAdmin.init();
+        }
+    });
+
+})(jQuery);
 
 // ===================================================================
 // HAUPT-ADMIN-KLASSE
