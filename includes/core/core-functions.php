@@ -955,31 +955,34 @@ function csv_import_convert_to_bytes( string $size_str ): int {
 function csv_import_get_progress(): array {
     $progress = get_option( 'csv_import_progress', [] );
     $default_progress = [
-        'running'    => false,
-        'processed'  => 0,
-        'total'      => 0,
-        'percent'    => 0,
-        'status'     => 'idle',
-        'message'    => 'Kein aktiver Import',
-        'timestamp'  => 0,
-        'start_time' => 0,
-        'errors'     => 0
+        'running'    => false, 'processed'  => 0, 'total'      => 0,
+        'percent'    => 0, 'status'     => 'idle', 'message'    => 'Kein aktiver Import',
     ];
+    return wp_parse_args( $progress, $default_progress );
+}
+
+function csv_import_update_progress( int $processed, int $total, string $status = 'processing' ): void {
+    $current_progress = get_option( 'csv_import_progress', [] );
+    $start_time = $current_progress['start_time'] ?? current_time( 'timestamp' );
     
-    $progress = wp_parse_args( $progress, $default_progress );
-    
-    // Validierung: Wenn Import als laufend markiert aber älter als 15 Minuten
-    if ( $progress['running'] && $progress['start_time'] > 0 ) {
-        $runtime = time() - $progress['start_time'];
-        if ( $runtime > 900 ) { // 15 Minuten
-            $progress['running'] = false;
-            $progress['status'] = 'timeout';
-            $progress['message'] = 'Import-Timeout nach ' . human_time_diff($progress['start_time']) . ' - automatisch zurückgesetzt';
-            update_option( 'csv_import_progress', $progress );
-        }
+    $progress = [
+        'running'    => !in_array($status, ['completed', 'failed', 'timeout']),
+        'processed'  => $processed,
+        'total'      => $total,
+        'percent'    => $total > 0 ? round( ( $processed / $total ) * 100, 1 ) : 0,
+        'status'     => $status,
+        'message'    => "Verarbeite {$processed} von {$total}...",
+        'start_time' => $start_time,
+    ];
+    update_option( 'csv_import_progress', $progress );
+}
+
+function csv_import_log( string $level, string $message, array $context = [] ): void {
+    if ( class_exists( 'CSV_Import_Error_Handler' ) ) {
+        CSV_Import_Error_Handler::handle( $level, $message, $context );
+    } else {
+        error_log( sprintf( '[CSV Import Pro %s] %s', strtoupper( $level ), $message ) );
     }
-    
-    return $progress;
 }
 
 /**
