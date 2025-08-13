@@ -1,9 +1,8 @@
 <?php
 /**
  * Core-Funktionen für das CSV Import Pro Plugin
- * OPTIMIERTE VERSION: Mit zeilenweiser Verarbeitung (Streaming) zur Reduzierung des Speicherverbrauchs.
+ * FINALE VERSION: Mit zeilenweiser Verarbeitung (Streaming) und Fehlerkorrekturen.
  */
-
 if ( ! defined( 'ABSPATH' ) ) {
     exit; // Direkten Zugriff verhindern
 }
@@ -16,13 +15,14 @@ function csv_import_check_stuck_imports() {
     $progress = get_option('csv_import_progress', []);
     if (!empty($progress['running']) && !empty($progress['start_time'])) {
         $runtime = time() - $progress['start_time'];
-        if ($runtime > 600) {
+        if ($runtime > 900) { // 15 Minuten
             csv_import_force_reset_import_status();
             csv_import_log('warning', 'Hängender Import-Prozess wurde automatisch zurückgesetzt', ['runtime' => $runtime]);
             set_transient('csv_import_stuck_reset_notice', true, 300);
         }
     }
 }
+add_action('admin_init', 'csv_import_check_stuck_imports');
 
 function csv_import_force_reset_import_status() {
     $import_options = ['csv_import_progress', 'csv_import_session_id', 'csv_import_start_time', 'csv_import_current_header', 'csv_import_running_lock', 'csv_import_batch_progress'];
@@ -46,7 +46,10 @@ function csv_import_is_import_running() {
     return true;
 }
 
-// ... (alle weiteren Schutz- und Konfigurationsfunktionen bleiben hier unverändert) ...
+// ===================================================================
+// KONFIGURATIONSFUNKTIONEN
+// ===================================================================
+
 function csv_import_get_config(): array {
     $config_keys = [
         'template_id', 'post_type', 'post_status', 'page_builder',
@@ -54,19 +57,17 @@ function csv_import_get_config(): array {
         'memory_limit', 'time_limit', 'seo_plugin', 'required_columns',
         'skip_duplicates', 'taxonomy_mapping'
     ];
-
     $config = [];
-    foreach ( $config_keys as $key ) {
-        $config[ $key ] = get_option( 'csv_import_' . $key, csv_import_get_default_value( $key ) );
+    foreach ($config_keys as $key) {
+        $config[$key] = get_option('csv_import_' . $key, csv_import_get_default_value($key));
     }
-
-    if ( is_string( $config['required_columns'] ) ) {
-        $config['required_columns'] = array_filter( array_map( 'trim', explode( "\n", $config['required_columns'] ?? '' ) ) );
+    if (is_string($config['required_columns'])) {
+        $config['required_columns'] = array_filter(array_map('trim', explode("\n", $config['required_columns'] ?? '')));
     }
     return $config;
 }
 
-function csv_import_get_default_value( string $key ) {
+function csv_import_get_default_value(string $key) {
     $defaults = [
         'template_id'      => 0,
         'post_type'        => 'page',
@@ -83,126 +84,91 @@ function csv_import_get_default_value( string $key ) {
         'skip_duplicates'  => true,
         'taxonomy_mapping' => []
     ];
-    return $defaults[ $key ] ?? null;
+    return $defaults[$key] ?? null;
 }
 
 // ===================================================================
-// CSV VERARBEITUNGSFUNKTIONEN (OPTIMIERT FÜR GERINGEN SPEICHERVERBRAUCH)
+// CSV VERARBEITUNGSFUNKTIONEN (OPTIMIERT)
 // ===================================================================
 
-/**
- * Lädt CSV-Daten von einer Quelle und verarbeitet sie als Stream.
- */
-function csv_import_load_csv_data( string $source, array $config ): array {
+function csv_import_load_csv_data(string $source, array $config): array {
     $file_handle = null;
     $temp_file_path = null;
-
     try {
-        if ( $source === 'dropbox' ) {
-            $temp_file_path = csv_import_download_dropbox_to_temp( $config );
-            $file_handle = fopen( $temp_file_path, 'r' );
-        } elseif ( $source === 'local' ) {
-            $file_path = ABSPATH . ltrim( $config['local_path'], '/' );
-            if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
-                throw new Exception( 'Lokale CSV-Datei nicht gefunden oder nicht lesbar: ' . $config['local_path'] );
+        if ($source === 'dropbox') {
+            $temp_file_path = csv_import_download_dropbox_to_temp($config);
+            $file_handle = fopen($temp_file_path, 'r');
+        } elseif ($source === 'local') {
+            $file_path = ABSPATH . ltrim($config['local_path'], '/');
+            if (!file_exists($file_path) || !is_readable($file_path)) {
+                throw new Exception('Lokale CSV-Datei nicht gefunden oder nicht lesbar: ' . $config['local_path']);
             }
-            $file_handle = fopen( $file_path, 'r' );
+            $file_handle = fopen($file_path, 'r');
         } else {
-            throw new Exception( 'Unbekannte CSV-Quelle: ' . $source );
+            throw new Exception('Unbekannte CSV-Quelle: ' . $source);
         }
-
-        if ( $file_handle === false ) {
-            throw new Exception( 'Datei konnte nicht zum Lesen geöffnet werden.' );
+        if ($file_handle === false) {
+            throw new Exception('Datei konnte nicht zum Lesen geöffnet werden.');
         }
-
-        return csv_import_process_csv_stream( $file_handle, $config );
-
+        return csv_import_process_csv_stream($file_handle);
     } finally {
-        if ( is_resource( $file_handle ) ) {
-            fclose( $file_handle );
+        if (is_resource($file_handle)) {
+            fclose($file_handle);
         }
-        if ( $temp_file_path && file_exists( $temp_file_path ) ) {
-            @unlink( $temp_file_path );
+        if ($temp_file_path && file_exists($temp_file_path)) {
+            @unlink($temp_file_path);
         }
     }
 }
 
-/**
- * Lädt eine Dropbox-Datei in eine temporäre Datei.
- */
-function csv_import_download_dropbox_to_temp( array $config ): string {
-    if ( empty( $config['dropbox_url'] ) ) {
-        throw new Exception( 'Dropbox URL nicht konfiguriert' );
+function csv_import_download_dropbox_to_temp(array $config): string {
+    if (empty($config['dropbox_url'])) {
+        throw new Exception('Dropbox URL nicht konfiguriert');
     }
-    $download_url = str_replace( '?dl=0', '?dl=1', $config['dropbox_url'] );
-    $temp_file = wp_tempnam( 'csv_import' );
-    if ( ! $temp_file ) {
-        throw new Exception( 'Konnte keine temporäre Datei erstellen.' );
+    $download_url = str_replace('?dl=0', '?dl=1', $config['dropbox_url']);
+    $temp_file = wp_tempnam('csv_import');
+    if (!$temp_file) {
+        throw new Exception('Konnte keine temporäre Datei erstellen.');
     }
-
-    $response = wp_remote_get( $download_url, [
-        'timeout'  => 60,
-        'stream'   => true,
-        'filename' => $temp_file
-    ] );
-
-    if ( is_wp_error( $response ) ) {
-        @unlink( $temp_file );
-        throw new Exception( 'Dropbox-Download fehlgeschlagen: ' . $response->get_error_message() );
+    $response = wp_remote_get($download_url, ['timeout' => 60, 'stream' => true, 'filename' => $temp_file]);
+    if (is_wp_error($response)) {
+        @unlink($temp_file);
+        throw new Exception('Dropbox-Download fehlgeschlagen: ' . $response->get_error_message());
     }
-    
-    $http_code = wp_remote_retrieve_response_code( $response );
-    if ( $http_code !== 200 ) {
-        @unlink( $temp_file );
-        throw new Exception( "Dropbox-Datei nicht verfügbar (HTTP {$http_code})" );
+    $http_code = wp_remote_retrieve_response_code($response);
+    if ($http_code !== 200) {
+        @unlink($temp_file);
+        throw new Exception("Dropbox-Datei nicht verfügbar (HTTP {$http_code})");
     }
     return $temp_file;
 }
 
-/**
- * Verarbeitet einen CSV-Dateistream Zeile für Zeile.
- */
-function csv_import_process_csv_stream( $file_handle, array $config ): array {
+function csv_import_process_csv_stream($file_handle): array {
     if (fgets($file_handle, 4) !== "\xef\xbb\xbf") {
         rewind($file_handle);
     }
-    
-    $header_line = fgets( $file_handle );
+    $header_line = fgets($file_handle);
     if ($header_line === false) {
         throw new Exception('Konnte die Header-Zeile nicht lesen. Die Datei ist möglicherweise leer.');
     }
-    
     $delimiter = csv_import_detect_csv_delimiter($header_line);
-    $headers = str_getcsv( trim($header_line), $delimiter );
-    $headers = array_map( 'trim', $headers );
-
-    if ( empty( array_filter( $headers ) ) ) {
-        throw new Exception( 'Keine gültigen Spalten-Header gefunden.' );
+    $headers = array_map('trim', str_getcsv(trim($header_line), $delimiter));
+    if (empty(array_filter($headers))) {
+        throw new Exception('Keine gültigen Spalten-Header gefunden.');
     }
-    
     $data = [];
-    while ( ( $row = fgetcsv( $file_handle, 0, $delimiter ) ) !== false ) {
+    while (($row = fgetcsv($file_handle, 0, $delimiter)) !== false) {
         if (count($row) === 1 && is_null($row[0])) continue;
-
         $row_data = [];
-        foreach ( $headers as $index => $header ) {
-            $row_data[ $header ] = isset( $row[ $index ] ) ? trim( $row[ $index ] ) : '';
+        foreach ($headers as $index => $header) {
+            $row_data[$header] = isset($row[$index]) ? trim($row[$index]) : '';
         }
         $data[] = $row_data;
     }
-    
-    return [
-        'headers' => $headers,
-        'data' => $data,
-        'total_rows' => count( $data ),
-        'delimiter' => $delimiter
-    ];
+    return ['headers' => $headers, 'data' => $data, 'total_rows' => count($data), 'delimiter' => $delimiter];
 }
 
-/**
- * Erkennt das CSV-Trennzeichen automatisch.
- */
-function csv_import_detect_csv_delimiter( string $header_line ): string {
+function csv_import_detect_csv_delimiter(string $header_line): string {
     $delimiters = [',' => 0, ';' => 0, "\t" => 0, '|' => 0];
     foreach ($delimiters as $delimiter => &$count) {
         $count = count(str_getcsv($header_line, $delimiter));
