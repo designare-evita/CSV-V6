@@ -1330,6 +1330,20 @@ function csv_import_cache_set_multiple(string $namespace, array $items, int $ttl
 }
 
 /**
+* Status 
+ */
+function csv_import_initialize_cache_with_test_data() {
+    if (!class_exists('CSV_Import_Memory_Cache')) {
+        return;
+    }
+    
+    // Generiere einige Cache-Hits
+    CSV_Import_Memory_Cache::get_config();
+    CSV_Import_Memory_Cache::get_config(); // Zweiter Aufruf = Hit!
+}
+add_action('admin_init', 'csv_import_initialize_cache_with_test_data');
+
+/**
  * Cache Tag System für gruppenweise Invalidierung
  */
 function csv_import_cache_tag(string $tag, string $namespace, string $key): void {
