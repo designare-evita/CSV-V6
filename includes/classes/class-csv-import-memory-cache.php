@@ -641,7 +641,7 @@ class CSV_Import_Memory_Cache {
         
         return [
             'enabled' => !self::$emergency_mode,
-            'healthy' => !self::$emergency_mode && $stats['hit_rate'] > 30,
+            'healthy' => !self::$emergency_mode && $stats['hit_rate'] > 15,
             'performance' => self::$emergency_mode ? 'emergency' : 
                            ($stats['hit_rate'] > 60 ? 'excellent' : 
                            ($stats['hit_rate'] > 30 ? 'good' : 'poor')),
