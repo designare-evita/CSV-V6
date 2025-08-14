@@ -1375,3 +1375,27 @@ csv_import_log('debug', 'CSV Import Memory Cache System vollständig geladen - R
                     </div>
                     
                     <div style="margin: 15px 0;">
+
+// CSS Fix für Dashboard Widget
+add_action('admin_head', function() {
+    if (get_current_screen()->id !== 'dashboard') {
+        return;
+    }
+    ?>
+    <style type="text/css">
+    #csv_import_cache_performance {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        z-index: auto !important;
+        transform: none !important;
+    }
+    #csv_import_cache_performance .inside {
+        background: transparent !important;
+        border: none !important;
+        margin: 0 !important;
+        padding: 12px !important;
+    }
+    </style>
+    <?php
+});
