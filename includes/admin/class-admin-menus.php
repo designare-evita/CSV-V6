@@ -571,6 +571,46 @@ class CSV_Import_Pro_Admin {
             CSV_IMPORT_PRO_VERSION,
             true
         );
+
+        // Konfetti-Bibliothek für Erfolgsmeldungen
+        wp_enqueue_script(
+            'canvas-confetti',
+            'https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js',
+            [],
+            '1.9.2',
+            true
+        );
+
+        // Inline-Skript für die Ausführung
+        $confetti_script = "
+            function csvImportCelebrate() {
+                if (typeof confetti === 'function') {
+                    confetti({
+                        particleCount: 150,
+                        spread: 80,
+                        origin: { y: 0.6 },
+                        colors: ['#00a32a', '#00ba37', '#84fab0', '#8fd3f4']
+                    });
+                }
+            }
+
+            jQuery(document).ready(function($) {
+                // Warten, bis AJAX-Import abgeschlossen ist und Erfolgs-Nachricht angezeigt wird
+                $(document).ajaxSuccess(function(event, xhr, settings) {
+                    if (settings.data && settings.data.includes('action=csv_import_start')) {
+                        if (xhr.responseJSON && xhr.responseJSON.success) {
+                            // Warten bis die Nachricht im DOM ist
+                            setTimeout(function() {
+                                if ($('.csv-import-success-message.perfect-import').length) {
+                                    csvImportCelebrate();
+                                }
+                            }, 200);
+                        }
+                    }
+                });
+            });
+        ";
+        wp_add_inline_script('csv-import-pro-admin-script', $confetti_script);
         
         // AJAX-Daten mit erweiterten Debug-Informationen
         wp_localize_script('csv-import-pro-admin-script', 'csvImportAjax', [
