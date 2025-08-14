@@ -308,7 +308,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 						<tbody>
 							<?php foreach ( $scheduled_imports as $import ) : ?>
 								<tr>
-									<td><?php echo esc_html( mysql2date( 'd.m.Y H:i:s', $import['time'] ?? '' ) ); ?></td>
+									<td><?php $timestamp = strtotime( $import['time'] ?? '' );
+                echo esc_html( wp_date( 'd.m.Y H:i:s', $timestamp ) );  ?></td>
 									<td>
 										<?php 
 										// ===================================================================
