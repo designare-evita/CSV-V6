@@ -1411,5 +1411,3 @@ add_action('admin_head', function() {
         padding: 12px !important;
     }
     </style>
-    <?php
-});
