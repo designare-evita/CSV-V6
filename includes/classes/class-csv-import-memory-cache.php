@@ -1390,9 +1390,10 @@ csv_import_log('debug', 'CSV Import Memory Cache System vollständig geladen - R
                     
                     <div style="margin: 15px 0;">
 
-// CSS Fix für Dashboard Widget
+<?php
+// CSS Fix für Dashboard Widget - Korrigierte Version
 add_action('admin_head', function() {
-    if (get_current_screen()->id !== 'dashboard') {
+    if (!function_exists('get_current_screen') || get_current_screen()->id !== 'dashboard') {
         return;
     }
     ?>
@@ -1410,4 +1411,202 @@ add_action('admin_head', function() {
         margin: 0 !important;
         padding: 12px !important;
     }
+    
+    /* Zusätzliche Styling-Verbesserungen für das Cache Dashboard Widget */
+    #csv_import_cache_performance .cache-performance-grid {
+        display: flex;
+        gap: 15px;
+        align-items: center;
+        margin-bottom: 15px;
+    }
+    
+    #csv_import_cache_performance .performance-badge {
+        background: var(--badge-color, #00a32a);
+        color: white;
+        padding: 10px;
+        border-radius: 4px;
+        text-align: center;
+        min-width: 100px;
+        font-weight: bold;
+    }
+    
+    #csv_import_cache_performance .cache-metrics {
+        flex: 1;
+        font-size: 13px;
+        line-height: 1.4;
+    }
+    
+    #csv_import_cache_performance .cache-warning {
+        margin-top: 10px;
+        padding: 8px;
+        background: #fcf0f1;
+        border-left: 4px solid #d63638;
+        font-size: 12px;
+        border-radius: 0 4px 4px 0;
+    }
+    
+    #csv_import_cache_performance .cache-actions {
+        margin-top: 10px;
+        text-align: center;
+    }
+    
+    /* Progress Bar Styling */
+    #csv_import_cache_performance .progress-bar {
+        background: #f1f1f1;
+        height: 8px;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 4px;
+    }
+    
+    #csv_import_cache_performance .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #00a32a, #00ba37);
+        border-radius: 4px;
+        transition: width 0.3s ease;
+    }
+    
+    /* Responsive Design für kleinere Dashboards */
+    @media (max-width: 782px) {
+        #csv_import_cache_performance .cache-performance-grid {
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        #csv_import_cache_performance .performance-badge {
+            min-width: auto;
+            width: 100%;
+        }
+    }
     </style>
+    <?php
+});
+
+// Verbesserte Dashboard Widget Implementierung
+function csv_import_render_cache_dashboard_widget() {
+    if (!class_exists('CSV_Import_Memory_Cache')) {
+        echo '<p>Cache System nicht verfügbar.</p>';
+        return;
+    }
+    
+    try {
+        $cache_status = CSV_Import_Memory_Cache::get_cache_status();
+        $stats = $cache_status['stats'];
+        
+        // Performance Badge Farbe bestimmen
+        $badge_color = match($cache_status['performance']) {
+            'excellent' => '#00a32a',
+            'good' => '#f56e28',
+            default => '#d63638'
+        };
+        
+        // Performance Text
+        $performance_text = match($cache_status['performance']) {
+            'excellent' => 'Exzellent',
+            'good' => 'Gut',
+            default => 'Probleme'
+        };
+        
+        ?>
+        <div class="cache-performance-grid">
+            <div class="performance-badge" style="--badge-color: <?php echo esc_attr($badge_color); ?>;">
+                <div style="font-size: 18px;"><?php echo esc_html($stats['hit_rate']); ?>%</div>
+                <div style="font-size: 12px;">Hit Rate</div>
+            </div>
+            
+            <div class="cache-metrics">
+                <div><strong>Cache Items:</strong> <?php echo esc_html(number_format($stats['total_items'])); ?></div>
+                <div><strong>Memory:</strong> <?php echo esc_html(size_format($stats['memory_usage'])); ?> / <?php echo esc_html(size_format($stats['memory_limit'])); ?></div>
+                <div>
+                    <strong>Status:</strong> 
+                    <span style="color: <?php echo $cache_status['healthy'] ? 'green' : 'red'; ?>;">
+                        <?php echo $cache_status['healthy'] ? '✅ Gesund' : '❌ ' . $performance_text; ?>
+                    </span>
+                </div>
+                
+                <!-- Visueller Memory Usage Indicator -->
+                <div style="margin-top: 8px;">
+                    <small>Memory Usage: <?php echo esc_html($stats['memory_usage_percent']); ?>%</small>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: <?php echo esc_attr($stats['memory_usage_percent']); ?>%;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <?php if ($stats['memory_usage_percent'] > 80): ?>
+        <div class="cache-warning">
+            ⚠️ <strong>Hoher Speicherverbrauch:</strong> Cache-Bereinigung empfohlen.
+        </div>
+        <?php endif; ?>
+        
+        <div class="cache-actions">
+            <a href="<?php echo esc_url(admin_url('tools.php?page=csv-import-cache')); ?>" class="button button-small">
+                🛠️ Cache verwalten
+            </a>
+            
+            <?php if ($stats['hit_rate'] < 30): ?>
+            <a href="<?php echo esc_url(admin_url('tools.php?page=csv-import-cache')); ?>" class="button button-small" style="margin-left: 5px; background: #f56e28; color: white; border-color: #f56e28;">
+                🔧 Performance prüfen
+            </a>
+            <?php endif; ?>
+        </div>
+        
+        <?php
+    } catch (Exception $e) {
+        echo '<div class="cache-warning">';
+        echo '⚠️ <strong>Cache Fehler:</strong> ' . esc_html($e->getMessage());
+        echo '</div>';
+        
+        error_log('CSV Import Cache Dashboard Widget Error: ' . $e->getMessage());
+    }
+}
+
+// Dashboard Widget mit verbesserter Error-Behandlung registrieren
+add_action('wp_dashboard_setup', function() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    
+    wp_add_dashboard_widget(
+        'csv_import_cache_performance',
+        '🚀 CSV Import Cache Performance',
+        'csv_import_render_cache_dashboard_widget'
+    );
+});
+
+// Zusätzlicher CSS-Fix für ältere WordPress-Versionen
+add_action('admin_footer', function() {
+    if (!function_exists('get_current_screen') || get_current_screen()->id !== 'dashboard') {
+        return;
+    }
+    ?>
+    <script type="text/javascript">
+    jQuery(document).ready(function($) {
+        // Fallback für Browser ohne CSS Grid Support
+        var $widget = $('#csv_import_cache_performance');
+        if ($widget.length) {
+            // Stelle sicher, dass das Widget korrekt positioniert ist
+            $widget.css({
+                'position': 'static',
+                'transform': 'none',
+                'top': 'auto',
+                'left': 'auto'
+            });
+            
+            // Progressive Enhancement für ältere Browser
+            if (!window.CSS || !CSS.supports('display', 'flex')) {
+                $widget.find('.cache-performance-grid').css({
+                    'display': 'block'
+                });
+                $widget.find('.performance-badge, .cache-metrics').css({
+                    'display': 'block',
+                    'margin-bottom': '10px'
+                });
+            }
+        }
+    });
+    </script>
+    <?php
+});
+?>
