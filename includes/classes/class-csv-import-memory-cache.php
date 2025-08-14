@@ -14,6 +14,12 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Verhindere Mehrfach-Loading
+if (defined('CSV_IMPORT_MEMORY_CACHE_LOADED')) {
+    return;
+}
+define('CSV_IMPORT_MEMORY_CACHE_LOADED', true);
+
 /**
  * Hauptklasse für das Memory Cache System
  */
