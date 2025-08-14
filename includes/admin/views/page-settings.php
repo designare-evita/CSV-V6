@@ -121,26 +121,29 @@ if ( ! defined( 'ABSPATH' ) ) {
 				<?php endif; ?>
 				
 				<table class="form-table compact-form" role="presentation">
-					<tbody>
-						<tr>
-							<th scope="row"><label for="csv_import_dropbox_url">Dropbox CSV-URL</label></th>
-							<td>
-								<input type="url" id="csv_import_dropbox_url" name="csv_import_dropbox_url"
-									   value="<?php echo esc_attr( get_option( 'csv_import_dropbox_url' ) ); ?>"
-									   class="regular-text" placeholder="https://www.dropbox.com/s/...?dl=1">
-								<p class="description">Direkt-Download-Link. Muss mit `?dl=1` enden.</p>
-							</td>
-						</tr>
-						<tr>
-							<th scope="row"><label for="csv_import_local_path">Lokaler CSV-Pfad</label></th>
-							<td>
-								<input type="text" id="csv_import_local_path" name="csv_import_local_path"
-									   value="<?php echo esc_attr( get_option( 'csv_import_local_path', 'data/landingpages.csv' ) ); ?>"
-									   class="regular-text">
-								<p class="description">
-									Pfad: <code><?php echo esc_html( ABSPATH . get_option( 'csv_import_local_path', 'data/landingpages.csv' ) ); ?></code>
-									<?php echo csv_import_get_file_status( ABSPATH . get_option( 'csv_import_local_path', 'data/landingpages.csv' ) ); ?>
-								</p>
+    <tbody>
+        <tr>
+            <th scope="row"><label for="csv_import_dropbox_url">Dropbox CSV-URL</label></th>
+            <td>
+                <input type="url" id="csv_import_dropbox_url" name="csv_import_dropbox_url"
+                       value="<?php echo esc_attr( get_option( 'csv_import_dropbox_url' ) ); ?>"
+                       class="regular-text" placeholder="https://www.dropbox.com/s/...?dl=1">
+                <p class="description">
+                    Direkt-Download-Link. Muss mit `?dl=1` enden.
+                    <?php echo csv_import_get_dropbox_status( get_option( 'csv_import_dropbox_url' ) ); ?>
+                </p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><label for="csv_import_local_path">Lokaler CSV-Pfad</label></th>
+            <td>
+                <input type="text" id="csv_import_local_path" name="csv_import_local_path"
+                       value="<?php echo esc_attr( get_option( 'csv_import_local_path', 'data/landingpages.csv' ) ); ?>"
+                       class="regular-text">
+                <p class="description">
+                    Pfad: <code><?php echo esc_html( ABSPATH . get_option( 'csv_import_local_path', 'data/landingpages.csv' ) ); ?></code>
+                    <?php echo csv_import_get_file_status( ABSPATH . get_option( 'csv_import_local_path', 'data/landingpages.csv' ) ); ?>
+                </p>
 							</td>
 						</tr>
 						<tr>
