@@ -2411,15 +2411,24 @@ function csv_import_get_dropbox_status( string $url ): string {
         return '<span style="color:red;">❌ Ungültige URL</span>';
     }
 
-    // Prüfen, ob die URL erreichbar ist, ohne die ganze Datei herunterzuladen
-    $response = wp_remote_head( $url, [ 'timeout' => 10 ] );
+    // Die URL für den direkten Download vorbereiten, falls noch nicht geschehen
+    $download_url = str_replace( 'www.dropbox.com', 'dl.dropboxusercontent.com', $url );
+    $download_url = str_replace( '?dl=0', '?dl=1', $download_url );
+
+
+    // Prüfen, ob die URL erreichbar ist, und Weiterleitungen folgen
+    $response = wp_remote_head( $download_url, [
+        'timeout'     => 15, // Etwas mehr Zeit für mögliche Weiterleitungen
+        'redirection' => 5   // WordPress anweisen, bis zu 5 Weiterleitungen zu folgen
+    ] );
 
     if ( is_wp_error( $response ) ) {
-        return '<span style="color:red;">❌ Fehler bei der Verbindung</span>';
+        return '<span style="color:red;">❌ Fehler bei der Verbindung: ' . esc_html( $response->get_error_message() ) . '</span>';
     }
 
     $http_code = wp_remote_retrieve_response_code( $response );
 
+    // Ein erfolgreicher Abruf nach einer Weiterleitung hat den Code 200
     if ( $http_code === 200 ) {
         $content_length = wp_remote_retrieve_header( $response, 'content-length' );
         $file_size = $content_length ? size_format( $content_length ) : 'unbekannte Größe';
@@ -2428,6 +2437,7 @@ function csv_import_get_dropbox_status( string $url ): string {
             $file_size
         );
     } else {
+        // Andere Fehlercodes weiterhin anzeigen
         return '<span style="color:red;">❌ Datei nicht erreichbar (Code: ' . esc_html( $http_code ) . ')</span>';
     }
 }
