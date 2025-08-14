@@ -1,31 +1,42 @@
 <?php
 /**
  * CSV Import Pro Memory Cache System
- * Version: 1.0
+ * Version: 1.1 - Memory Safe Edition
  * 
- * Implementiert ein intelligentes Memory Cache System für das CSV Import Pro Plugin
- * - Object Cache für Meta-Daten, Templates und Konfigurationen
- * - CSV Data Cache für verarbeitete CSV-Daten
- * - Query Cache für WordPress Database Queries
- * - Auto-Invalidation und Memory Management
+ * Implementiert ein MEMORY-SICHERES Cache System für das CSV Import Pro Plugin
+ * - Mehrfach-Loading-Schutz
+ * - Aggressive Memory Management
+ * - Emergency Stop Mechanismen
+ * - Reduzierte Cache-Limits für Stabilität
  */
 
-if ( ! defined( 'ABSPATH' ) ) {
+if (!defined('ABSPATH')) {
     exit;
 }
 
-// Verhindere Mehrfach-Loading
+// Verhindere Mehrfach-Loading - KRITISCH!
 if (defined('CSV_IMPORT_MEMORY_CACHE_LOADED')) {
     return;
 }
 define('CSV_IMPORT_MEMORY_CACHE_LOADED', true);
 
+// Memory Check vor Initialisierung
+$current_memory = memory_get_usage(true);
+$memory_limit_bytes = function_exists('wp_convert_hr_to_bytes') ? 
+                     wp_convert_hr_to_bytes(ini_get('memory_limit')) : 
+                     (int)ini_get('memory_limit') * 1024 * 1024;
+
+if ($current_memory > ($memory_limit_bytes * 0.8)) { // 80% des Limits
+    error_log('[CSV Import Cache] Memory zu hoch (' . size_format($current_memory) . '), Cache-System nicht geladen');
+    return;
+}
+
 /**
- * Hauptklasse für das Memory Cache System
+ * Memory-sichere Hauptklasse für das Cache System
  */
 class CSV_Import_Memory_Cache {
     
-    // Cache Namespaces für verschiedene Datentypen
+    // Cache Namespaces
     const CACHE_CONFIG = 'csv_config';
     const CACHE_CSV_DATA = 'csv_data';
     const CACHE_TEMPLATES = 'csv_templates';
@@ -34,8 +45,9 @@ class CSV_Import_Memory_Cache {
     const CACHE_VALIDATION = 'csv_validation';
     const CACHE_STATS = 'csv_stats';
     
-    // Memory Management
-    private static $max_memory_usage = 134217728; // 128MB
+    // Memory Management - REDUZIERTE LIMITS
+    private static $max_memory_usage = 16777216; // 16MB statt 128MB
+    private static $emergency_mode = false;
     private static $cache_hit_ratio = [];
     private static $performance_metrics = [];
     
@@ -51,53 +63,144 @@ class CSV_Import_Memory_Cache {
         'misses' => 0,
         'sets' => 0,
         'evictions' => 0,
-        'memory_usage' => 0
+        'memory_usage' => 0,
+        'emergency_stops' => 0
     ];
     
     /**
-     * Initialisiert das Cache System
+     * Initialisiert das Cache System - Memory Safe
      */
     public static function init() {
-        // WordPress Object Cache Integration
-        add_action('init', [__CLASS__, 'setup_wordpress_cache_integration']);
+        // Prüfe ob bereits im Emergency Mode
+        if (self::$emergency_mode) {
+            return;
+        }
         
-        // Memory Management Hooks
-        add_action('csv_import_before_processing', [__CLASS__, 'prepare_cache_for_import']);
-        add_action('csv_import_after_processing', [__CLASS__, 'cleanup_import_cache']);
+        // Memory Check vor jeder Initialisierung
+        if (!self::check_memory_before_operation()) {
+            return;
+        }
         
-        // Performance Monitoring
-        add_action('shutdown', [__CLASS__, 'log_cache_performance']);
+        // Reduzierte Hook-Registrierung
+        add_action('init', [__CLASS__, 'setup_wordpress_cache_integration'], 999);
+        add_action('shutdown', [__CLASS__, 'log_cache_performance'], 1);
         
-        // Automatische Bereinigung
-        add_action('csv_import_daily_maintenance', [__CLASS__, 'daily_cache_maintenance']);
-        
-        // Memory Limit setzen basierend auf verfügbarem Speicher
-        self::$max_memory_usage = self::calculate_optimal_cache_size();
+        // Memory Limit berechnen
+        self::$max_memory_usage = self::calculate_safe_cache_size();
         
         if (function_exists('csv_import_log')) {
-            csv_import_log('debug', 'Memory Cache System initialisiert', [
+            csv_import_log('debug', 'Memory Cache System initialisiert (Safe Mode)', [
                 'max_cache_size' => size_format(self::$max_memory_usage),
+                'current_memory' => size_format(memory_get_usage(true)),
                 'php_memory_limit' => ini_get('memory_limit')
             ]);
         }
     }
     
+    /**
+     * KRITISCHER Memory Check vor jeder Operation
+     */
+    private static function check_memory_before_operation(): bool {
+        $current = memory_get_usage(true);
+        $limit_bytes = function_exists('wp_convert_hr_to_bytes') ? 
+                      wp_convert_hr_to_bytes(ini_get('memory_limit')) : 
+                      (int)str_replace('M', '', ini_get('memory_limit')) * 1024 * 1024;
+        
+        // Bei 85% des Memory Limits → Emergency Stop
+        if ($current > ($limit_bytes * 0.85)) {
+            self::emergency_stop();
+            error_log('[CSV Import Cache] EMERGENCY STOP - Memory Limit fast erreicht: ' . 
+                     size_format($current) . ' / ' . size_format($limit_bytes));
+            return false;
+        }
+        
+        // Bei 500MB+ → Warnung und Cache reduzieren
+        if ($current > 524288000) { // 500MB
+            self::$max_memory_usage = 8388608; // Reduziere auf 8MB
+            error_log('[CSV Import Cache] Hoher Memory-Verbrauch, Cache reduziert: ' . size_format($current));
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Emergency Stop - Alle Cache-Daten löschen
+     */
+    public static function emergency_stop(): void {
+        self::$emergency_mode = true;
+        self::$stats['emergency_stops']++;
+        
+        // Alle Cache-Arrays leeren
+        self::$object_cache = [];
+        self::$csv_cache = [];
+        self::$query_cache = [];
+        self::$validation_cache = [];
+        
+        // Cache-Limit auf Minimum
+        self::$max_memory_usage = 1048576; // 1MB
+        
+        // Hooks entfernen um weitere Operationen zu verhindern
+        remove_all_actions('csv_import_before_processing');
+        remove_all_actions('csv_import_after_processing');
+        remove_all_actions('csv_import_daily_maintenance');
+        
+        error_log('[CSV Import Cache] EMERGENCY STOP ausgeführt - Alle Cache-Daten gelöscht');
+    }
+    
+    /**
+     * Sichere Cache-Größe berechnen
+     */
+    private static function calculate_safe_cache_size(): int {
+        $current_usage = memory_get_usage(true);
+        $memory_limit = ini_get('memory_limit');
+        
+        // Bei hohem Memory-Verbrauch → Minimal-Cache
+        if ($current_usage > 419430400) { // 400MB
+            return 4194304; // 4MB
+        }
+        
+        if ($memory_limit === '-1') {
+            return 16777216; // 16MB bei unbegrenztem Memory
+        }
+        
+        if (function_exists('wp_convert_hr_to_bytes')) {
+            $memory_bytes = wp_convert_hr_to_bytes($memory_limit);
+        } else {
+            $memory_bytes = (int)str_replace('M', '', $memory_limit) * 1024 * 1024;
+        }
+        
+        $available = $memory_bytes - $current_usage;
+        
+        // Sehr konservativ: Nur 2% des verfügbaren Speichers
+        $cache_size = min(
+            max($available * 0.02, 4194304), // Minimum 4MB
+            16777216 // Maximum 16MB
+        );
+        
+        return (int) $cache_size;
+    }
+    
     // ===================================================================
-    // HAUPT-CACHE METHODEN
+    // HAUPT-CACHE METHODEN - Memory Safe
     // ===================================================================
     
     /**
-     * Holt einen Wert aus dem Cache
-     * 
-     * @param string $namespace Cache Namespace
-     * @param string $key Cache Key
-     * @param mixed $default Fallback Wert
-     * @return mixed Cached Wert oder Default
+     * Holt einen Wert aus dem Cache - Memory Safe
      */
     public static function get(string $namespace, string $key, $default = null) {
+        // Emergency Mode Check
+        if (self::$emergency_mode) {
+            return $default;
+        }
+        
+        // Memory Check
+        if (!self::check_memory_before_operation()) {
+            return $default;
+        }
+        
         $cache_key = self::build_cache_key($namespace, $key);
         
-        // Prüfe verschiedene Cache-Ebenen
+        // Memory Cache prüfen
         $value = self::get_from_memory_cache($cache_key);
         
         if ($value !== null) {
@@ -106,14 +209,18 @@ class CSV_Import_Memory_Cache {
             return $value;
         }
         
-        // WordPress Object Cache als Fallback
-        $value = self::get_from_object_cache($cache_key);
-        
-        if ($value !== false) {
-            // Zurück in Memory Cache für schnelleren Zugriff
-            self::set_memory_cache($cache_key, $value);
-            self::$stats['hits']++;
-            return $value;
+        // WordPress Object Cache als Fallback (nur wenn Memory OK)
+        if (memory_get_usage(true) < (self::$max_memory_usage * 2)) {
+            $value = self::get_from_object_cache($cache_key);
+            
+            if ($value !== false) {
+                // Nur in Memory Cache wenn Platz vorhanden
+                if (self::can_cache_value_safe($value)) {
+                    self::set_memory_cache($cache_key, $value);
+                }
+                self::$stats['hits']++;
+                return $value;
+            }
         }
         
         self::$stats['misses']++;
@@ -123,27 +230,32 @@ class CSV_Import_Memory_Cache {
     }
     
     /**
-     * Setzt einen Wert im Cache
-     * 
-     * @param string $namespace Cache Namespace
-     * @param string $key Cache Key
-     * @param mixed $value Zu cachender Wert
-     * @param int $ttl Time to Live in Sekunden
-     * @return bool Erfolg
+     * Setzt einen Wert im Cache - Memory Safe
      */
     public static function set(string $namespace, string $key, $value, int $ttl = 3600): bool {
+        // Emergency Mode Check
+        if (self::$emergency_mode) {
+            return false;
+        }
+        
+        // Memory Check
+        if (!self::check_memory_before_operation()) {
+            return false;
+        }
+        
         $cache_key = self::build_cache_key($namespace, $key);
         
-        // Memory Management prüfen
-        if (!self::can_cache_value($value)) {
+        // Prüfe ob Wert cachebar ist
+        if (!self::can_cache_value_safe($value)) {
             if (function_exists('csv_import_log')) {
-                csv_import_log('debug', 'Cache: Wert zu groß für Memory Cache', [
-                    'key' => $cache_key,
-                    'size' => strlen(serialize($value))
+                csv_import_log('debug', 'Cache: Wert zu groß oder Memory-Druck', [
+                    'key' => substr($cache_key, 0, 50),
+                    'size' => strlen(serialize($value)),
+                    'current_memory' => size_format(memory_get_usage(true))
                 ]);
             }
             
-            // Nur in WordPress Object Cache
+            // Versuche nur WordPress Object Cache
             return self::set_object_cache($cache_key, $value, $ttl);
         }
         
@@ -161,9 +273,19 @@ class CSV_Import_Memory_Cache {
     }
     
     /**
-     * Löscht einen Wert aus dem Cache
+     * Löscht einen Wert aus dem Cache - Memory Safe
      */
     public static function delete(string $namespace, string $key): bool {
+        // Emergency Mode Check
+        if (self::$emergency_mode) {
+            return true; // Fake success
+        }
+        
+        // Memory Check
+        if (!self::check_memory_before_operation()) {
+            return false;
+        }
+        
         $cache_key = self::build_cache_key($namespace, $key);
         
         $deleted = false;
@@ -181,9 +303,14 @@ class CSV_Import_Memory_Cache {
     }
     
     /**
-     * Löscht alle Werte eines Namespaces
+     * Löscht alle Werte eines Namespaces - Memory Safe
      */
     public static function flush_namespace(string $namespace): int {
+        // Emergency Mode Check
+        if (self::$emergency_mode) {
+            return 0;
+        }
+        
         $deleted = 0;
         $prefix = $namespace . ':';
         
@@ -205,175 +332,29 @@ class CSV_Import_Memory_Cache {
     }
     
     // ===================================================================
-    // SPEZIALISIERTE CACHE METHODEN
+    // MEMORY SAFE CACHE OPERATIONEN
     // ===================================================================
     
     /**
-     * Cached Konfigurationsdaten
+     * Prüft ob ein Wert sicher gecacht werden kann
      */
-    public static function get_config(string $config_key = null) {
-        if ($config_key) {
-            return self::get(self::CACHE_CONFIG, $config_key);
-        }
-        
-        $full_config = self::get(self::CACHE_CONFIG, 'full_config');
-        
-        if ($full_config === null) {
-            if (function_exists('csv_import_get_config')) {
-                $full_config = csv_import_get_config();
-            } else {
-                $full_config = [];
-            }
-            self::set(self::CACHE_CONFIG, 'full_config', $full_config, 1800); // 30 Min
-        }
-        
-        return $full_config;
-    }
-    
-    /**
-     * Cached Template-Daten
-     */
-    public static function get_template(int $template_id) {
-        $template = self::get(self::CACHE_TEMPLATES, "template_{$template_id}");
-        
-        if ($template === null) {
-            $template_post = get_post($template_id);
-            if ($template_post) {
-                $template = [
-                    'post' => $template_post,
-                    'meta' => get_post_meta($template_id),
-                    'cached_at' => time()
-                ];
-                
-                self::set(self::CACHE_TEMPLATES, "template_{$template_id}", $template, 3600);
-            }
-        }
-        
-        return $template;
-    }
-    
-    /**
-     * Cached CSV-Validierung
-     */
-    public static function get_csv_validation(string $source, string $config_hash) {
-        $cache_key = "validation_{$source}_{$config_hash}";
-        return self::get(self::CACHE_VALIDATION, $cache_key);
-    }
-    
-    public static function set_csv_validation(string $source, string $config_hash, array $validation, int $ttl = 600) {
-        $cache_key = "validation_{$source}_{$config_hash}";
-        return self::set(self::CACHE_VALIDATION, $cache_key, $validation, $ttl);
-    }
-    
-    /**
-     * Cached CSV-Daten mit Kompression
-     */
-    public static function get_csv_data(string $source_hash) {
-        $compressed_data = self::get(self::CACHE_CSV_DATA, "data_{$source_hash}");
-        
-        if ($compressed_data && function_exists('gzuncompress')) {
-            return unserialize(gzuncompress($compressed_data));
-        }
-        
-        return $compressed_data;
-    }
-    
-    public static function set_csv_data(string $source_hash, array $data, int $ttl = 1800) {
-        // Große CSV-Daten komprimieren
-        if (function_exists('gzcompress') && count($data) > 100) {
-            $compressed = gzcompress(serialize($data), 6);
-            return self::set(self::CACHE_CSV_DATA, "data_{$source_hash}", $compressed, $ttl);
-        }
-        
-        return self::set(self::CACHE_CSV_DATA, "data_{$source_hash}", $data, $ttl);
-    }
-    
-    /**
-     * Cached Database Queries
-     */
-    public static function get_query_result(string $query_hash) {
-        return self::get(self::CACHE_QUERIES, "query_{$query_hash}");
-    }
-    
-    public static function set_query_result(string $query_hash, $result, int $ttl = 300) {
-        return self::set(self::CACHE_QUERIES, "query_{$query_hash}", $result, $ttl);
-    }
-    
-    /**
-     * Cached Statistiken
-     */
-    public static function get_stats(string $stats_type) {
-        return self::get(self::CACHE_STATS, $stats_type, []);
-    }
-    
-    public static function set_stats(string $stats_type, array $stats, int $ttl = 900) {
-        return self::set(self::CACHE_STATS, $stats_type, $stats, $ttl);
-    }
-    
-    // ===================================================================
-    // MEMORY MANAGEMENT
-    // ===================================================================
-    
-    /**
-     * Berechnet optimale Cache-Größe basierend auf verfügbarem Speicher
-     */
-    private static function calculate_optimal_cache_size(): int {
-        $memory_limit = ini_get('memory_limit');
-        
-        if ($memory_limit === '-1') {
-            return 268435456; // 256MB wenn unbegrenzt
-        }
-        
-        if (function_exists('wp_convert_hr_to_bytes')) {
-            $memory_bytes = wp_convert_hr_to_bytes($memory_limit);
-        } else {
-            // Fallback für ältere WordPress-Versionen
-            $memory_bytes = self::convert_hr_to_bytes($memory_limit);
-        }
-        
-        $current_usage = memory_get_usage(true);
-        $available = $memory_bytes - $current_usage;
-        
-        // Verwende maximal 25% des verfügbaren Speichers für Cache
-        $cache_size = min(
-            max($available * 0.25, 67108864), // Minimum 64MB
-            268435456 // Maximum 256MB
-        );
-        
-        return (int) $cache_size;
-    }
-    
-    /**
-     * Fallback für wp_convert_hr_to_bytes
-     */
-    private static function convert_hr_to_bytes(string $size): int {
-        $size = trim($size);
-        $last = strtolower($size[strlen($size)-1]);
-        $size = (int) $size;
-        
-        switch($last) {
-            case 'g':
-                $size *= 1024;
-            case 'm':
-                $size *= 1024;
-            case 'k':
-                $size *= 1024;
-        }
-        
-        return $size;
-    }
-    
-    /**
-     * Prüft ob ein Wert gecacht werden kann
-     */
-    private static function can_cache_value($value): bool {
+    private static function can_cache_value_safe($value): bool {
         $serialized_size = strlen(serialize($value));
         $current_usage = self::get_current_cache_memory_usage();
         
-        // Prüfe ob genug Speicher verfügbar
+        // Größe-Checks
+        if ($serialized_size > 1048576) { // Mehr als 1MB → Nein
+            return false;
+        }
+        
+        if ($serialized_size > (self::$max_memory_usage * 0.1)) { // Mehr als 10% des Cache → Nein
+            return false;
+        }
+        
+        // Memory-Druck Check
         if (($current_usage + $serialized_size) > self::$max_memory_usage) {
             // Versuche Platz zu schaffen
-            self::evict_cache_items($serialized_size);
+            self::evict_cache_items_safe($serialized_size);
             
             $new_usage = self::get_current_cache_memory_usage();
             if (($new_usage + $serialized_size) > self::$max_memory_usage) {
@@ -381,44 +362,38 @@ class CSV_Import_Memory_Cache {
             }
         }
         
-        // Prüfe Einzelwert-Größe (max 25% des Cache)
-        if ($serialized_size > (self::$max_memory_usage * 0.25)) {
-            return false;
-        }
-        
         return true;
     }
     
     /**
-     * Räumt Cache-Einträge für neuen Speicher frei
+     * Räumt Cache-Einträge sicher frei
      */
-    private static function evict_cache_items(int $needed_space): void {
+    private static function evict_cache_items_safe(int $needed_space): void {
         $freed = 0;
         $evicted = 0;
         
-        // LRU Eviction - älteste Einträge zuerst
-        $items_by_access = [];
+        // Einfache FIFO Eviction - älteste Einträge zuerst
+        $items_to_remove = [];
         
         foreach (self::$object_cache as $key => $item) {
-            if (isset($item['last_access'])) {
-                $items_by_access[$key] = $item['last_access'];
-            }
-        }
-        
-        asort($items_by_access);
-        
-        foreach ($items_by_access as $key => $last_access) {
             if ($freed >= $needed_space) {
                 break;
             }
             
-            if (isset(self::$object_cache[$key])) {
-                $item_size = strlen(serialize(self::$object_cache[$key]['data']));
-                unset(self::$object_cache[$key]);
-                
-                $freed += $item_size;
-                $evicted++;
+            $item_size = strlen(serialize($item));
+            $items_to_remove[] = $key;
+            $freed += $item_size;
+            $evicted++;
+            
+            // Sicherheits-Limit
+            if ($evicted >= 50) {
+                break;
             }
+        }
+        
+        // Entferne Items
+        foreach ($items_to_remove as $key) {
+            unset(self::$object_cache[$key]);
         }
         
         self::$stats['evictions'] += $evicted;
@@ -446,10 +421,6 @@ class CSV_Import_Memory_Cache {
         return $total;
     }
     
-    // ===================================================================
-    // INTERNE CACHE OPERATIONEN
-    // ===================================================================
-    
     /**
      * Memory Cache Operationen
      */
@@ -461,15 +432,17 @@ class CSV_Import_Memory_Cache {
         $item = self::$object_cache[$key];
         
         // TTL prüfen
-        if (isset($item['expires']) && $item['expires'] < time()) {
+        if (isset($item['expires']) && $item['expires'] > 0 && $item['expires'] < time()) {
             unset(self::$object_cache[$key]);
             return null;
         }
         
-        // Access Time aktualisieren für LRU
-        self::$object_cache[$key]['last_access'] = time();
+        // Access Time aktualisieren
+        if (isset(self::$object_cache[$key])) {
+            self::$object_cache[$key]['last_access'] = time();
+        }
         
-        return $item['data'];
+        return $item['data'] ?? null;
     }
     
     private static function set_memory_cache(string $key, $value, int $ttl = 3600): bool {
@@ -479,8 +452,7 @@ class CSV_Import_Memory_Cache {
             'data' => $value,
             'expires' => $expires,
             'created' => time(),
-            'last_access' => time(),
-            'hit_count' => 0
+            'last_access' => time()
         ];
         
         return true;
@@ -505,11 +477,74 @@ class CSV_Import_Memory_Cache {
     }
     
     // ===================================================================
-    // PERFORMANCE TRACKING
+    // SPEZIALISIERTE CACHE METHODEN - Memory Safe
     // ===================================================================
     
     /**
-     * Verfolgt Cache Hits für Analytics
+     * Cached Konfigurationsdaten
+     */
+    public static function get_config(string $config_key = null) {
+        if (self::$emergency_mode) {
+            return $config_key ? null : [];
+        }
+        
+        if ($config_key) {
+            return self::get(self::CACHE_CONFIG, $config_key);
+        }
+        
+        $full_config = self::get(self::CACHE_CONFIG, 'full_config');
+        
+        if ($full_config === null) {
+            if (function_exists('csv_import_get_config')) {
+                $full_config = csv_import_get_config();
+            } else {
+                $full_config = [];
+            }
+            
+            // Nur kleine Configs cachen
+            if (strlen(serialize($full_config)) < 10240) { // Unter 10KB
+                self::set(self::CACHE_CONFIG, 'full_config', $full_config, 1800);
+            }
+        }
+        
+        return $full_config;
+    }
+    
+    /**
+     * Cached Template-Daten
+     */
+    public static function get_template(int $template_id) {
+        if (self::$emergency_mode) {
+            return null;
+        }
+        
+        $template = self::get(self::CACHE_TEMPLATES, "template_{$template_id}");
+        
+        if ($template === null) {
+            $template_post = get_post($template_id);
+            if ($template_post) {
+                $template = [
+                    'post' => $template_post,
+                    'meta' => get_post_meta($template_id),
+                    'cached_at' => time()
+                ];
+                
+                // Nur kleine Templates cachen
+                if (strlen(serialize($template)) < 51200) { // Unter 50KB
+                    self::set(self::CACHE_TEMPLATES, "template_{$template_id}", $template, 3600);
+                }
+            }
+        }
+        
+        return $template;
+    }
+    
+    // ===================================================================
+    // PERFORMANCE TRACKING - Reduziert
+    // ===================================================================
+    
+    /**
+     * Verfolgt Cache Hits
      */
     private static function track_cache_hit(string $namespace, string $key): void {
         if (!isset(self::$cache_hit_ratio[$namespace])) {
@@ -521,7 +556,7 @@ class CSV_Import_Memory_Cache {
     }
     
     /**
-     * Verfolgt Cache Misses für Analytics
+     * Verfolgt Cache Misses
      */
     private static function track_cache_miss(string $namespace, string $key): void {
         if (!isset(self::$cache_hit_ratio[$namespace])) {
@@ -532,13 +567,13 @@ class CSV_Import_Memory_Cache {
     }
     
     /**
-     * Loggt Cache Performance beim Shutdown
+     * Loggt Cache Performance
      */
     public static function log_cache_performance(): void {
         $total_requests = self::$stats['hits'] + self::$stats['misses'];
         
         if ($total_requests === 0) {
-            return; // Keine Cache-Aktivität
+            return;
         }
         
         $hit_rate = round((self::$stats['hits'] / $total_requests) * 100, 2);
@@ -548,134 +583,30 @@ class CSV_Import_Memory_Cache {
             'hit_rate' => $hit_rate,
             'total_requests' => $total_requests,
             'memory_usage' => size_format($memory_usage),
-            'cache_efficiency' => $hit_rate > 60 ? 'good' : ($hit_rate > 30 ? 'medium' : 'poor'),
-            'namespace_stats' => self::$cache_hit_ratio
+            'emergency_stops' => self::$stats['emergency_stops'],
+            'emergency_mode' => self::$emergency_mode,
+            'cache_efficiency' => $hit_rate > 60 ? 'good' : ($hit_rate > 30 ? 'medium' : 'poor')
         ];
-        
-        // Nur bei schlechter Performance oder Debug-Modus loggen
-        if ($hit_rate < 50 || (defined('WP_DEBUG') && WP_DEBUG)) {
-            if (function_exists('csv_import_log')) {
-                csv_import_log('debug', 'Cache Performance Report', $performance);
-            }
-        }
         
         // Performance-Metriken für Monitoring
         update_option('csv_import_cache_performance', $performance, false);
     }
     
     // ===================================================================
-    // IMPORT-SPEZIFISCHE CACHE FUNKTIONEN
+    // WORDPRESS INTEGRATION - Minimal
     // ===================================================================
-    
-    /**
-     * Bereitet Cache für Import vor
-     */
-    public static function prepare_cache_for_import(): void {
-        // Temporäre Cache-Vergrößerung für Import
-        $original_limit = self::$max_memory_usage;
-        self::$max_memory_usage = min($original_limit * 1.5, 536870912); // Max 512MB
-        
-        if (function_exists('csv_import_log')) {
-            csv_import_log('debug', 'Cache für Import vorbereitet', [
-                'original_limit' => size_format($original_limit),
-                'import_limit' => size_format(self::$max_memory_usage)
-            ]);
-        }
-    }
-    
-    /**
-     * Bereinigt Cache nach Import
-     */
-    public static function cleanup_import_cache(): void {
-        // CSV-Daten Cache leeren (da nach Import nicht mehr benötigt)
-        self::flush_namespace(self::CACHE_CSV_DATA);
-        
-        // Validierungen behalten aber Query Cache leeren
-        self::flush_namespace(self::CACHE_QUERIES);
-        
-        // Cache-Limit zurücksetzen
-        self::$max_memory_usage = self::calculate_optimal_cache_size();
-        
-        if (function_exists('csv_import_log')) {
-            csv_import_log('debug', 'Cache nach Import bereinigt');
-        }
-    }
-    
-    /**
-     * Invalidiert spezifische Cache-Bereiche
-     */
-    public static function invalidate_config_cache(): void {
-        self::flush_namespace(self::CACHE_CONFIG);
-    }
-    
-    public static function invalidate_template_cache(int $template_id = null): void {
-        if ($template_id) {
-            self::delete(self::CACHE_TEMPLATES, "template_{$template_id}");
-        } else {
-            self::flush_namespace(self::CACHE_TEMPLATES);
-        }
-    }
-    
-    // ===================================================================
-    // WARTUNG UND CLEANUP
-    // ===================================================================
-    
-    /**
-     * Tägliche Cache-Wartung
-     */
-    public static function daily_cache_maintenance(): void {
-        $cleaned_items = 0;
-        $freed_memory = 0;
-        
-        // Abgelaufene Einträge entfernen
-        foreach (self::$object_cache as $key => $item) {
-            if (isset($item['expires']) && $item['expires'] > 0 && $item['expires'] < time()) {
-                $freed_memory += strlen(serialize($item));
-                unset(self::$object_cache[$key]);
-                $cleaned_items++;
-            }
-        }
-        
-        // Cache-Statistiken zurücksetzen
-        self::$stats = [
-            'hits' => 0,
-            'misses' => 0,
-            'sets' => 0,
-            'evictions' => 0,
-            'memory_usage' => self::get_current_cache_memory_usage()
-        ];
-        
-        if (function_exists('csv_import_log')) {
-            csv_import_log('info', 'Cache Wartung abgeschlossen', [
-                'cleaned_items' => $cleaned_items,
-                'freed_memory' => size_format($freed_memory),
-                'current_usage' => size_format(self::$stats['memory_usage'])
-            ]);
-        }
-    }
     
     /**
      * WordPress Cache Integration Setup
      */
     public static function setup_wordpress_cache_integration(): void {
+        // Nur wenn nicht im Emergency Mode
+        if (self::$emergency_mode) {
+            return;
+        }
+        
         // Gruppe für WordPress Object Cache registrieren
         wp_cache_add_global_groups(['csv_import']);
-        
-        // Cache-Hooks für automatische Invalidierung
-        add_action('save_post', function($post_id) {
-            // Template-Cache invalidieren wenn Template geändert wird
-            $template_id = get_option('csv_import_template_id');
-            if ($post_id == $template_id) {
-                self::invalidate_template_cache($post_id);
-            }
-        });
-        
-        add_action('update_option', function($option_name, $old_value, $new_value) {
-            // Config-Cache invalidieren bei Einstellungsänderungen
-            if (strpos($option_name, 'csv_import_') === 0) {
-                self::invalidate_config_cache();
-            }
-        }, 10, 3);
     }
     
     // ===================================================================
@@ -694,8 +625,10 @@ class CSV_Import_Memory_Cache {
             'total_items' => count(self::$object_cache),
             'memory_usage' => self::get_current_cache_memory_usage(),
             'memory_limit' => self::$max_memory_usage,
-            'memory_usage_percent' => round((self::get_current_cache_memory_usage() / self::$max_memory_usage) * 100, 2),
+            'memory_usage_percent' => self::$max_memory_usage > 0 ? 
+                                    round((self::get_current_cache_memory_usage() / self::$max_memory_usage) * 100, 2) : 0,
             'stats' => self::$stats,
+            'emergency_mode' => self::$emergency_mode,
             'namespace_stats' => self::$cache_hit_ratio
         ];
     }
@@ -707,16 +640,18 @@ class CSV_Import_Memory_Cache {
         $stats = self::get_cache_stats();
         
         return [
-            'enabled' => true,
-            'healthy' => $stats['hit_rate'] > 30,
-            'performance' => $stats['hit_rate'] > 60 ? 'excellent' : ($stats['hit_rate'] > 30 ? 'good' : 'poor'),
+            'enabled' => !self::$emergency_mode,
+            'healthy' => !self::$emergency_mode && $stats['hit_rate'] > 30,
+            'performance' => self::$emergency_mode ? 'emergency' : 
+                           ($stats['hit_rate'] > 60 ? 'excellent' : 
+                           ($stats['hit_rate'] > 30 ? 'good' : 'poor')),
             'memory_pressure' => $stats['memory_usage_percent'] > 80,
             'stats' => $stats
         ];
     }
     
     /**
-     * Cache komplett leeren (für Debug/Wartung)
+     * Cache komplett leeren
      */
     public static function flush_all_cache(): int {
         $cleared_items = count(self::$object_cache);
@@ -731,6 +666,9 @@ class CSV_Import_Memory_Cache {
             wp_cache_flush_group('csv_import');
         }
         
+        // Emergency Mode zurücksetzen
+        self::$emergency_mode = false;
+        
         if (function_exists('csv_import_log')) {
             csv_import_log('info', 'Gesamter Cache geleert', [
                 'cleared_items' => $cleared_items
@@ -739,15 +677,35 @@ class CSV_Import_Memory_Cache {
         
         return $cleared_items;
     }
+    
+    // ===================================================================
+    // DUMMY METHODEN für Kompatibilität
+    // ===================================================================
+    
+    public static function get_csv_validation($source, $config_hash) {
+        return self::get(self::CACHE_VALIDATION, "validation_{$source}_{$config_hash}");
+    }
+    
+    public static function set_csv_validation($source, $config_hash, $validation, $ttl = 600) {
+        return self::set(self::CACHE_VALIDATION, "validation_{$source}_{$config_hash}", $validation, $ttl);
+    }
+    
+    public static function invalidate_config_cache(): void {
+        self::flush_namespace(self::CACHE_CONFIG);
+    }
+    
+    public static function invalidate_template_cache(int $template_id = null): void {
+        if ($template_id) {
+            self::delete(self::CACHE_TEMPLATES, "template_{$template_id}");
+        } else {
+            self::flush_namespace(self::CACHE_TEMPLATES);
+        }
+    }
 }
 
 // ===================================================================
-// CACHE INTEGRATION FUNKTIONEN
+// CACHE INTEGRATION FUNKTIONEN - Minimal
 // ===================================================================
-
-/**
- * Integration mit bestehenden CSV Import Funktionen
- */
 
 /**
  * Cached Version von csv_import_get_config()
@@ -757,82 +715,18 @@ function csv_import_get_config_cached(): array {
 }
 
 /**
- * Cached Template Loader
+ * Cache komplett leeren (für Debug/Wartung)
  */
-function csv_import_get_template_cached(int $template_id) {
-    return CSV_Import_Memory_Cache::get_template($template_id);
-}
-
-/**
- * Cached CSV Validation
- */
-function csv_import_validate_csv_cached(string $source, array $config): array {
-    $config_hash = md5(serialize($config));
-    
-    $cached_validation = CSV_Import_Memory_Cache::get_csv_validation($source, $config_hash);
-    
-    if ($cached_validation !== null) {
-        if (function_exists('csv_import_log')) {
-            csv_import_log('debug', 'CSV Validation aus Cache geladen', [
-                'source' => $source,
-                'config_hash' => substr($config_hash, 0, 8)
-            ]);
-        }
-        return $cached_validation;
-    }
-    
-    // Fallback zur originalen Funktion
-    if (function_exists('csv_import_validate_csv_source')) {
-        $validation = csv_import_validate_csv_source($source, $config);
-    } else {
-        $validation = ['valid' => false, 'error' => 'Validation function not available'];
-    }
-    
-    // Nur erfolgreiche Validierungen cachen
-    if ($validation['valid']) {
-        CSV_Import_Memory_Cache::set_csv_validation($source, $config_hash, $validation);
-    }
-    
-    return $validation;
-}
-
-/**
- * Database Query Caching Wrapper
- */
-function csv_import_cached_query(string $query, array $args = []): array {
-    global $wpdb;
-    
-    $query_hash = md5($query . serialize($args));
-    
-    $cached_result = CSV_Import_Memory_Cache::get_query_result($query_hash);
-    
-    if ($cached_result !== null) {
-        return $cached_result;
-    }
-    
-    // Query ausführen
-    if (!empty($args)) {
-        $prepared_query = $wpdb->prepare($query, $args);
-    } else {
-        $prepared_query = $query;
-    }
-    
-    $result = $wpdb->get_results($prepared_query, ARRAY_A);
-    
-    // Nur erfolgreiche Queries mit Ergebnissen cachen
-    if (!empty($result)) {
-        CSV_Import_Memory_Cache::set_query_result($query_hash, $result, 300); // 5 Min TTL
-    }
-    
-    return $result;
+function csv_import_flush_all_cache(): int {
+    return CSV_Import_Memory_Cache::flush_all_cache();
 }
 
 // ===================================================================
-// ADMIN INTEGRATION
+// ADMIN INTEGRATION - Vereinfacht
 // ===================================================================
 
 /**
- * Admin-Interface für Cache Management
+ * Vereinfachte Admin-Klasse
  */
 class CSV_Import_Cache_Admin {
     
@@ -859,12 +753,17 @@ class CSV_Import_Cache_Admin {
         
         ?>
         <div class="wrap">
-            <h1>🚀 CSV Import Memory Cache</h1>
+            <h1>🛡️ CSV Import Memory Cache (Safe Mode)</h1>
             
-            <div class="csv-cache-dashboard" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+            <?php if ($cache_status['stats']['emergency_mode']): ?>
+            <div class="notice notice-error">
+                <p><strong>⚠️ EMERGENCY MODE AKTIV</strong> - Cache läuft im Sicherheitsmodus wegen Memory-Problemen.</p>
+            </div>
+            <?php endif; ?>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
                 
-                <!-- Cache Status -->
-                <div class="cache-status-box" style="background: white; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px;">
+                <div style="background: white; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px;">
                     <h3>📊 Cache Status</h3>
                     
                     <div style="margin: 15px 0;">
@@ -879,108 +778,40 @@ class CSV_Import_Cache_Admin {
                     </div>
                     
                     <div style="margin: 15px 0;">
-                        <strong>Performance:</strong> 
-                        <span style="color: <?php echo $cache_status['performance'] === 'excellent' ? 'green' : ($cache_status['performance'] === 'good' ? 'orange' : 'red'); ?>">
-                            <?php echo ucfirst($cache_status['performance']); ?>
-                        </span>
+                        <strong>Hit Rate:</strong> <?php echo $stats['hit_rate']; ?>%
                     </div>
                     
                     <div style="margin: 15px 0;">
-                        <strong>Hit Rate:</strong> <?php echo $stats['hit_rate']; ?>%
-                        <div style="background: #f1f1f1; height: 20px; border-radius: 3px; margin-top: 5px;">
-                            <div style="background: linear-gradient(90deg, #00a32a, #00ba37); height: 100%; width: <?php echo $stats['hit_rate']; ?>%; border-radius: 3px;"></div>
-                        </div>
+                        <strong>Emergency Stops:</strong> <?php echo $stats['stats']['emergency_stops']; ?>
                     </div>
                 </div>
                 
-                <!-- Cache Aktionen -->
-                <div class="cache-actions-box" style="background: white; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px;">
-                    <h3>⚙️ Cache Verwaltung</h3>
+                <div style="background: white; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px;">
+                    <h3>🛠️ Cache Verwaltung</h3>
                     
                     <div style="margin: 15px 0;">
                         <button type="button" class="button button-primary" onclick="csvCacheFlush()">
-                            🗑️ Cache komplett leeren
+                            🗑️ Cache leeren
                         </button>
-                        <p class="description">Löscht alle gecachten Daten. Performance wird vorübergehend reduziert.</p>
-                    </div>
-                    
-                    <div style="margin: 15px 0;">
-                        <button type="button" class="button button-secondary" onclick="csvCacheRefreshStats()">
-                            📊 Statistiken aktualisieren
-                        </button>
+                        <p class="description">Leert alle gecachten Daten und setzt Emergency Mode zurück.</p>
                     </div>
                     
                     <div id="cache-action-result" style="margin-top: 15px;"></div>
-                </div>
-                
-                <!-- Detaillierte Statistiken -->
-                <div class="cache-details-box" style="grid-column: 1 / -1; background: white; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px;">
-                    <h3>📈 Detaillierte Cache-Statistiken</h3>
-                    
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 15px;">
-                        
-                        <div>
-                            <h4>Zugriffe</h4>
-                            <ul style="list-style: none; padding: 0;">
-                                <li><strong>Hits:</strong> <?php echo number_format($stats['stats']['hits']); ?></li>
-                                <li><strong>Misses:</strong> <?php echo number_format($stats['stats']['misses']); ?></li>
-                                <li><strong>Sets:</strong> <?php echo number_format($stats['stats']['sets']); ?></li>
-                                <li><strong>Evictions:</strong> <?php echo number_format($stats['stats']['evictions']); ?></li>
-                            </ul>
-                        </div>
-                        
-                        <div>
-                            <h4>Namespace Performance</h4>
-                            <?php foreach ($stats['namespace_stats'] as $namespace => $ns_stats): ?>
-                                <?php $ns_hit_rate = $ns_stats['total'] > 0 ? round(($ns_stats['hits'] / $ns_stats['total']) * 100, 1) : 0; ?>
-                                <div style="margin: 5px 0;">
-                                    <strong><?php echo esc_html($namespace); ?>:</strong> <?php echo $ns_hit_rate; ?>%
-                                    <div style="background: #f1f1f1; height: 10px; border-radius: 3px; margin-top: 2px;">
-                                        <div style="background: #00a32a; height: 100%; width: <?php echo $ns_hit_rate; ?>%; border-radius: 3px;"></div>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                        
-                        <div>
-                            <h4>System Info</h4>
-                            <ul style="list-style: none; padding: 0;">
-                                <li><strong>PHP Memory:</strong> <?php echo ini_get('memory_limit'); ?></li>
-                                <li><strong>WP Object Cache:</strong> <?php echo wp_using_ext_object_cache() ? 'Aktiv' : 'Standard'; ?></li>
-                                <li><strong>Cache Healthy:</strong> <?php echo $cache_status['healthy'] ? '✅ Ja' : '❌ Nein'; ?></li>
-                            </ul>
-                        </div>
-                    </div>
                 </div>
             </div>
             
             <script>
             function csvCacheFlush() {
-                if (!confirm('Cache wirklich komplett leeren? Dies kann die Performance vorübergehend beeinträchtigen.')) {
-                    return;
-                }
-                
                 jQuery.post(ajaxurl, {
                     action: 'csv_cache_flush',
                     nonce: '<?php echo wp_create_nonce('csv_cache_nonce'); ?>'
                 }, function(response) {
                     const resultDiv = document.getElementById('cache-action-result');
                     if (response.success) {
-                        resultDiv.innerHTML = '<div class="notice notice-success"><p>✅ Cache erfolgreich geleert: ' + response.data.cleared_items + ' Einträge entfernt</p></div>';
-                        setTimeout(() => location.reload(), 2000);
+                        resultDiv.innerHTML = '<div class="notice notice-success"><p>✅ Cache erfolgreich geleert</p></div>';
+                        setTimeout(() => location.reload(), 1000);
                     } else {
-                        resultDiv.innerHTML = '<div class="notice notice-error"><p>❌ Fehler: ' + response.data.message + '</p></div>';
-                    }
-                });
-            }
-            
-            function csvCacheRefreshStats() {
-                jQuery.post(ajaxurl, {
-                    action: 'csv_cache_stats',
-                    nonce: '<?php echo wp_create_nonce('csv_cache_nonce'); ?>'
-                }, function(response) {
-                    if (response.success) {
-                        location.reload();
+                        resultDiv.innerHTML = '<div class="notice notice-error"><p>❌ Fehler beim Cache leeren</p></div>';
                     }
                 });
             }
@@ -1017,274 +848,13 @@ class CSV_Import_Cache_Admin {
 }
 
 // ===================================================================
-// CACHE-ENHANCED IMPORT FUNCTIONS
+// DASHBOARD WIDGET - Memory Safe
 // ===================================================================
 
 /**
- * Cache-optimierte Version der wichtigsten Import-Funktionen
+ * Memory-sichere Dashboard Widget Darstellung
  */
-
-/**
- * Cached Post Meta Loader
- */
-function csv_import_get_post_meta_cached(int $post_id, string $meta_key = '', bool $single = false) {
-    $cache_key = "post_meta_{$post_id}_{$meta_key}_" . ($single ? '1' : '0');
-    
-    $cached_meta = CSV_Import_Memory_Cache::get(CSV_Import_Memory_Cache::CACHE_META, $cache_key);
-    
-    if ($cached_meta !== null) {
-        return $cached_meta;
-    }
-    
-    $meta_value = get_post_meta($post_id, $meta_key, $single);
-    
-    // Cache für 30 Minuten
-    CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_META, $cache_key, $meta_value, 1800);
-    
-    return $meta_value;
-}
-
-/**
- * Cached Duplicate Check
- */
-function csv_import_check_duplicate_cached(string $post_title, string $post_type): ?int {
-    $cache_key = "duplicate_check_" . md5($post_title . $post_type);
-    
-    $cached_result = CSV_Import_Memory_Cache::get(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key);
-    
-    if ($cached_result !== null) {
-        return $cached_result ?: null;
-    }
-    
-    $existing_post = get_page_by_title($post_title, OBJECT, $post_type);
-    $post_id = $existing_post ? $existing_post->ID : 0;
-    
-    // Cache für 5 Minuten (Duplikate ändern sich während Import nicht)
-    CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key, $post_id, 300);
-    
-    return $post_id ?: null;
-}
-
-/**
- * Cached Slug Generator
- */
-function csv_import_generate_unique_slug_cached(string $title, string $post_type = 'post'): string {
-    static $used_slugs = [];
-    
-    $base_slug = sanitize_title($title);
-    
-    if (empty($base_slug)) {
-        $base_slug = 'csv-import-post-' . uniqid();
-    }
-    
-    $cache_key = "slug_exists_{$base_slug}_{$post_type}";
-    
-    // Prüfe zuerst lokale Session-Cache für bereits verwendete Slugs
-    if (isset($used_slugs[$base_slug])) {
-        $counter = $used_slugs[$base_slug] + 1;
-        $used_slugs[$base_slug] = $counter;
-        return $base_slug . '-' . $counter;
-    }
-    
-    // Prüfe Cache ob Slug bereits existiert
-    $slug_exists = CSV_Import_Memory_Cache::get(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key);
-    
-    if ($slug_exists === null) {
-        $existing_post = get_page_by_path($base_slug, OBJECT, $post_type);
-        $slug_exists = $existing_post ? true : false;
-        
-        // Cache für 10 Minuten
-        CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key, $slug_exists, 600);
-    }
-    
-    if (!$slug_exists) {
-        $used_slugs[$base_slug] = 0;
-        return $base_slug;
-    }
-    
-    // Slug existiert bereits, finde alternative
-    $counter = 1;
-    $unique_slug = $base_slug;
-    
-    do {
-        $unique_slug = $base_slug . '-' . $counter;
-        $unique_cache_key = "slug_exists_{$unique_slug}_{$post_type}";
-        
-        $unique_exists = CSV_Import_Memory_Cache::get(CSV_Import_Memory_Cache::CACHE_QUERIES, $unique_cache_key);
-        
-        if ($unique_exists === null) {
-            $existing_post = get_page_by_path($unique_slug, OBJECT, $post_type);
-            $unique_exists = $existing_post ? true : false;
-            
-            CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_QUERIES, $unique_cache_key, $unique_exists, 600);
-        }
-        
-        if (!$unique_exists) {
-            break;
-        }
-        
-        $counter++;
-        
-    } while ($counter <= 100); // Sicherheits-Limit
-    
-    $used_slugs[$base_slug] = $counter;
-    return $unique_slug;
-}
-
-/**
- * Cached Image Download Status
- */
-function csv_import_get_image_download_status_cached(string $image_url): array {
-    $cache_key = "image_status_" . md5($image_url);
-    
-    $cached_status = CSV_Import_Memory_Cache::get(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key);
-    
-    if ($cached_status !== null) {
-        return $cached_status;
-    }
-    
-    // Basis-Validierung der URL
-    if (!filter_var($image_url, FILTER_VALIDATE_URL)) {
-        $status = ['valid' => false, 'error' => 'Invalid URL'];
-        CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key, $status, 3600);
-        return $status;
-    }
-    
-    // HEAD-Request für schnelle Validierung
-    $response = wp_remote_head($image_url, [
-        'timeout' => 10,
-        'redirection' => 3
-    ]);
-    
-    if (is_wp_error($response)) {
-        $status = ['valid' => false, 'error' => $response->get_error_message()];
-    } else {
-        $http_code = wp_remote_retrieve_response_code($response);
-        $content_type = wp_remote_retrieve_header($response, 'content-type');
-        
-        $status = [
-            'valid' => $http_code === 200,
-            'http_code' => $http_code,
-            'content_type' => $content_type,
-            'is_image' => strpos($content_type, 'image/') === 0
-        ];
-    }
-    
-    // Cache für 1 Stunde (Bilder-URLs ändern sich selten)
-    CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key, $status, 3600);
-    
-    return $status;
-}
-
-// ===================================================================
-// CACHE INTEGRATION HOOKS
-// ===================================================================
-
-/**
- * Integration in bestehende CSV Import Workflows
- */
-add_action('csv_import_before_row_processing', function($row_index, $total_rows) {
-    // Cache Warming für Template bei jedem 10. Post
-    if ($row_index % 10 === 0) {
-        $template_id = get_option('csv_import_template_id');
-        if ($template_id) {
-            CSV_Import_Memory_Cache::get_template($template_id);
-        }
-    }
-}, 10, 2);
-
-add_action('csv_import_after_post_created', function($post_id, $session_id, $source) {
-    // Duplicate-Check Cache für erstellten Post invalidieren
-    $post = get_post($post_id);
-    if ($post) {
-        $cache_key = "duplicate_check_" . md5($post->post_title . $post->post_type);
-        CSV_Import_Memory_Cache::delete(CSV_Import_Memory_Cache::CACHE_QUERIES, $cache_key);
-    }
-}, 10, 3);
-
-add_action('wp_ajax_csv_import_validate', function() {
-    // Cache Validation Results
-    $type = sanitize_key($_POST['type'] ?? '');
-    if (in_array($type, ['dropbox', 'local'])) {
-        $config = csv_import_get_config();
-        
-        // Verwende cached Validation falls verfügbar
-        $validation = csv_import_validate_csv_cached($type, $config);
-        
-        if ($validation['valid']) {
-            wp_send_json_success($validation);
-        } else {
-            wp_send_json_error($validation);
-        }
-        return;
-    }
-});
-
-// ===================================================================
-// PERFORMANCE OPTIMIERUNGEN
-// ===================================================================
-
-/**
- * Cache-Warming Funktionen für bessere Performance
- */
-class CSV_Import_Cache_Warmer {
-    
-    /**
-     * Wärmt wichtige Cache-Bereiche vor Import vor
-     */
-    public static function warm_cache_for_import(array $config): void {
-        if (function_exists('csv_import_log')) {
-            csv_import_log('debug', 'Cache Warming gestartet');
-        }
-        
-        // Template vorladen
-        if (!empty($config['template_id'])) {
-            CSV_Import_Memory_Cache::get_template($config['template_id']);
-        }
-        
-        // Konfiguration cachen
-        CSV_Import_Memory_Cache::get_config();
-        
-        // System Health für Monitoring
-        if (function_exists('csv_import_system_health_check')) {
-            $health = csv_import_system_health_check();
-            CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_STATS, 'system_health', $health, 300);
-        }
-        
-        if (function_exists('csv_import_log')) {
-            csv_import_log('debug', 'Cache Warming abgeschlossen');
-        }
-    }
-    
-    /**
-     * Lädt häufig verwendete Post-Meta-Felder vor
-     */
-    public static function preload_common_meta(array $post_ids): void {
-        $common_meta_keys = [
-            '_yoast_wpseo_title',
-            '_yoast_wpseo_metadesc', 
-            'rank_math_title',
-            'rank_math_description',
-            '_elementor_data',
-            '_wp_page_template'
-        ];
-        
-        foreach ($post_ids as $post_id) {
-            foreach ($common_meta_keys as $meta_key) {
-                csv_import_get_post_meta_cached($post_id, $meta_key, true);
-            }
-        }
-    }
-}
-
-// ===================================================================
-// DASHBOARD WIDGET
-// ===================================================================
-
-/**
- * Saubere Widget-Darstellung ohne störende Elemente
- */
-function csv_import_render_clean_cache_widget() {
+function csv_import_render_safe_cache_widget() {
     if (!class_exists('CSV_Import_Memory_Cache')) {
         echo '<p>Cache System nicht verfügbar.</p>';
         return;
@@ -1295,47 +865,55 @@ function csv_import_render_clean_cache_widget() {
         $stats = $cache_status['stats'];
         
         // Performance Badge Farbe
-        $badge_color = match($cache_status['performance']) {
-            'excellent' => '#00a32a',
-            'good' => '#f56e28',
-            default => '#d63638'
-        };
+        $badge_color = '#2271b1'; // Standard blau
+        if ($cache_status['stats']['emergency_mode']) {
+            $badge_color = '#d63638'; // Rot für Emergency
+        } elseif ($cache_status['performance'] === 'excellent') {
+            $badge_color = '#00a32a'; // Grün für Excellent
+        }
         
         ?>
-        <div class="cache-performance-grid">
-            <div class="performance-badge" style="background: <?php echo esc_attr($badge_color); ?> !important; color: white; padding: 10px; border-radius: 4px; text-align: center; min-width: 100px; font-weight: bold;">
-                <div style="font-size: 18px;"><?php echo esc_html($stats['hit_rate']); ?>%</div>
-                <div style="font-size: 12px;">Hit Rate</div>
+        <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px;">
+            <div style="background: <?php echo esc_attr($badge_color); ?>; color: white; padding: 10px; border-radius: 4px; text-align: center; min-width: 80px; font-weight: bold;">
+                <div style="font-size: 16px;"><?php echo esc_html($stats['hit_rate']); ?>%</div>
+                <div style="font-size: 11px;">Hit Rate</div>
             </div>
             
-            <div class="cache-metrics" style="flex: 1; font-size: 13px; line-height: 1.4;">
-                <div><strong>Cache Items:</strong> <?php echo esc_html(number_format($stats['total_items'])); ?></div>
-                <div><strong>Memory:</strong> <?php echo esc_html(size_format($stats['memory_usage'])); ?> / <?php echo esc_html(size_format($stats['memory_limit'])); ?></div>
+            <div style="flex: 1; font-size: 13px; line-height: 1.4;">
+                <div><strong>Items:</strong> <?php echo esc_html(number_format($stats['total_items'])); ?></div>
+                <div><strong>Memory:</strong> <?php echo esc_html(size_format($stats['memory_usage'])); ?></div>
                 <div>
                     <strong>Status:</strong> 
-                    <span style="color: <?php echo $cache_status['healthy'] ? 'green' : 'red'; ?>;">
-                        <?php echo $cache_status['healthy'] ? 'Gesund' : 'Probleme'; ?>
+                    <span style="color: <?php echo $cache_status['enabled'] ? 'green' : 'red'; ?>;">
+                        <?php 
+                        if ($cache_status['stats']['emergency_mode']) {
+                            echo '🚨 Emergency';
+                        } elseif ($cache_status['healthy']) {
+                            echo '✅ Gesund';
+                        } else {
+                            echo '⚠️ Probleme';
+                        }
+                        ?>
                     </span>
                 </div>
                 
-                <div style="margin-top: 8px;">
-                    <small>Memory Usage: <?php echo esc_html($stats['memory_usage_percent']); ?>%</small>
-                    <div class="progress-bar" style="background: #f1f1f1; height: 8px; border-radius: 4px; margin-top: 4px;">
-                        <div class="progress-fill" style="height: 100%; background: linear-gradient(90deg, #00a32a, #00ba37); border-radius: 4px; width: <?php echo esc_attr($stats['memory_usage_percent']); ?>%;"></div>
-                    </div>
+                <?php if ($stats['stats']['emergency_stops'] > 0): ?>
+                <div style="margin-top: 5px; color: #d63638; font-size: 12px;">
+                    Emergency Stops: <?php echo $stats['stats']['emergency_stops']; ?>
                 </div>
+                <?php endif; ?>
             </div>
         </div>
         
-        <?php if ($stats['memory_usage_percent'] > 80): ?>
-        <div class="cache-warning" style="margin: 10px 0; padding: 8px; background: #fcf0f1; border-left: 4px solid #d63638; font-size: 12px; border-radius: 0 4px 4px 0;">
-            <strong>Hoher Speicherverbrauch:</strong> Cache-Bereinigung empfohlen.
+        <?php if ($cache_status['stats']['emergency_mode']): ?>
+        <div style="margin: 10px 0; padding: 8px; background: #fcf0f1; border-left: 4px solid #d63638; font-size: 12px; border-radius: 0 4px 4px 0;">
+            <strong>Emergency Mode:</strong> Cache läuft im Sicherheitsmodus.
         </div>
         <?php endif; ?>
         
-        <div class="cache-actions" style="margin: 10px 0 0 0; text-align: center;">
+        <div style="margin: 10px 0 0 0; text-align: center;">
             <a href="<?php echo esc_url(admin_url('tools.php?page=csv-import-cache')); ?>" class="button button-small">
-                Cache verwalten
+                🛠️ Cache verwalten
             </a>
         </div>
         <?php
@@ -1344,77 +922,45 @@ function csv_import_render_clean_cache_widget() {
         echo '<div style="margin: 10px 0; padding: 8px; background: #fcf0f1; border-left: 4px solid #d63638; font-size: 12px;">';
         echo '<strong>Cache Fehler:</strong> ' . esc_html($e->getMessage());
         echo '</div>';
+        
+        error_log('CSV Import Cache Widget Error: ' . $e->getMessage());
     }
 }
 
-// Dashboard Widget CSS Fix
+// Dashboard Widget CSS - Minimal und sicher
 add_action('admin_head', function() {
     if (!function_exists('get_current_screen') || get_current_screen()->id !== 'dashboard') {
         return;
     }
     ?>
     <style type="text/css">
-    /* Entferne alle störenden Styling-Elemente vom Cache Dashboard Widget */
     #csv_import_cache_performance {
-        position: relative !important;
-        top: auto !important;
-        left: auto !important;
-        z-index: auto !important;
-        transform: none !important;
-        margin: 0 !important;
-        padding: 0 !important;
         background: #fff !important;
         border: 1px solid #c3c4c7 !important;
-        box-shadow: 0 1px 1px rgba(0,0,0,.04) !important;
+        position: relative !important;
     }
     
-    /* Widget Header - entferne grünen Balken */
     #csv_import_cache_performance .hndle {
         background: #fff !important;
         border-bottom: 1px solid #c3c4c7 !important;
         color: #1d2327 !important;
-        padding: 12px !important;
-        margin: 0 !important;
     }
     
-    /* Entferne alle Pseudo-Elemente */
-    #csv_import_cache_performance::before,
-    #csv_import_cache_performance::after,
-    #csv_import_cache_performance .hndle::before,
-    #csv_import_cache_performance .hndle::after,
-    #csv_import_cache_performance .inside::before,
-    #csv_import_cache_performance .inside::after {
-        display: none !important;
-        content: none !important;
-        background: none !important;
-    }
-    
-    /* Widget Content */
     #csv_import_cache_performance .inside {
         background: #fff !important;
         padding: 12px !important;
     }
     
-    /* Cache Grid */
-    #csv_import_cache_performance .cache-performance-grid {
-        display: flex;
-        gap: 15px;
-        align-items: center;
-        margin: 0 0 15px 0;
-    }
-    
-    /* Responsive */
-    @media (max-width: 782px) {
-        #csv_import_cache_performance .cache-performance-grid {
-            flex-direction: column;
-            gap: 10px;
-        }
+    /* Entferne problematische Pseudo-Elemente */
+    #csv_import_cache_performance::before,
+    #csv_import_cache_performance::after {
+        display: none !important;
     }
     </style>
     <?php
 });
 
-// Dashboard Widget Registration
+// Dashboard Widget Registration - Memory Safe
 add_action('wp_dashboard_setup', function() {
     if (!current_user_can('manage_options')) {
         return;
@@ -1422,22 +968,18 @@ add_action('wp_dashboard_setup', function() {
     
     wp_add_dashboard_widget(
         'csv_import_cache_performance',
-        'CSV Import Cache Performance',
+        'CSV Import Cache (Safe Mode)',
         function() {
             echo '<div style="background: #fff; margin: 0; padding: 0;">';
-            csv_import_render_clean_cache_widget();
+            csv_import_render_safe_cache_widget();
             echo '</div>';
         }
     );
 });
 
 // ===================================================================
-// FINALE CACHE UTILITIES
+// SIMPLIFIED UTILITY FUNCTIONS
 // ===================================================================
-
-/**
- * Hilfsfunktionen für einfache Cache-Nutzung
- */
 
 /**
  * Einfacher Cache-Get mit Callback
@@ -1454,212 +996,115 @@ function csv_import_cache_remember(string $namespace, string $key, callable $cal
 }
 
 /**
- * Batch Cache Operations für bessere Performance
+ * Cache Status Check
  */
-function csv_import_cache_get_multiple(string $namespace, array $keys): array {
-    $results = [];
-    
-    foreach ($keys as $key) {
-        $results[$key] = CSV_Import_Memory_Cache::get($namespace, $key);
-    }
-    
-    return $results;
-}
-
-function csv_import_cache_set_multiple(string $namespace, array $items, int $ttl = 3600): bool {
-    $success = true;
-    
-    foreach ($items as $key => $value) {
-        if (!CSV_Import_Memory_Cache::set($namespace, $key, $value, $ttl)) {
-            $success = false;
-        }
-    }
-    
-    return $success;
-}
-
-/**
- * Status Initialization
- */
-function csv_import_initialize_cache_with_test_data() {
+function csv_import_cache_is_healthy(): bool {
     if (!class_exists('CSV_Import_Memory_Cache')) {
-        return;
+        return false;
     }
     
-    // Generiere einige Cache-Hits
-    CSV_Import_Memory_Cache::get_config();
-    CSV_Import_Memory_Cache::get_config(); // Zweiter Aufruf = Hit!
-}
-add_action('admin_init', 'csv_import_initialize_cache_with_test_data');
-
-/**
- * Cache Tag System für gruppenweise Invalidierung
- */
-function csv_import_cache_tag(string $tag, string $namespace, string $key): void {
-    $tagged_items = CSV_Import_Memory_Cache::get(CSV_Import_Memory_Cache::CACHE_META, "tags_{$tag}", []);
-    $tagged_items[] = $namespace . ':' . $key;
-    
-    CSV_Import_Memory_Cache::set(CSV_Import_Memory_Cache::CACHE_META, "tags_{$tag}", array_unique($tagged_items), 7200);
-}
-
-function csv_import_cache_invalidate_tag(string $tag): int {
-    $tagged_items = CSV_Import_Memory_Cache::get(CSV_Import_Memory_Cache::CACHE_META, "tags_{$tag}", []);
-    $invalidated = 0;
-    
-    foreach ($tagged_items as $cache_key) {
-        if (strpos($cache_key, ':') !== false) {
-            list($namespace, $key) = explode(':', $cache_key, 2);
-            if (CSV_Import_Memory_Cache::delete($namespace, $key)) {
-                $invalidated++;
-            }
-        }
-    }
-    
-    // Tag-Liste löschen
-    CSV_Import_Memory_Cache::delete(CSV_Import_Memory_Cache::CACHE_META, "tags_{$tag}");
-    
-    return $invalidated;
+    $status = CSV_Import_Memory_Cache::get_cache_status();
+    return $status['enabled'] && $status['healthy'];
 }
 
 // ===================================================================
-// CACHE INITIALIZATION
+// CACHE INITIALIZATION - Memory Safe
 // ===================================================================
 
-// Cache System initialisieren
+// Cache System initialisieren - Mit Priorität und Error Handling
 add_action('plugins_loaded', function() {
-    CSV_Import_Memory_Cache::init();
-    CSV_Import_Cache_Admin::init();
-    
-    if (function_exists('csv_import_log')) {
-        csv_import_log('info', 'CSV Import Memory Cache System geladen');
-    }
-}, 15);
-
-// Cache für neue Imports vorbereiten
-add_action('csv_import_start', function() {
-    $config = CSV_Import_Memory_Cache::get_config();
-    CSV_Import_Cache_Warmer::warm_cache_for_import($config);
-});
-
-// Cache nach Import optimieren
-add_action('csv_import_completed', function($result, $source) {
-    CSV_Import_Memory_Cache::cleanup_import_cache();
-}, 10, 2);
-
-// Emergency Cache Flush bei Memory-Problemen
-add_action('csv_import_memory_warning', function() {
-    $cache_stats = CSV_Import_Memory_Cache::get_cache_stats();
-    
-    if ($cache_stats['memory_usage_percent'] > 90) {
-        CSV_Import_Memory_Cache::flush_namespace(CSV_Import_Memory_Cache::CACHE_CSV_DATA);
-        CSV_Import_Memory_Cache::flush_namespace(CSV_Import_Memory_Cache::CACHE_QUERIES);
+    try {
+        // Prüfe Memory vor Initialisierung
+        $current_memory = memory_get_usage(true);
+        if ($current_memory > 524288000) { // 500MB
+            error_log('[CSV Import Cache] Memory zu hoch für Initialisierung: ' . size_format($current_memory));
+            return;
+        }
+        
+        CSV_Import_Memory_Cache::init();
+        CSV_Import_Cache_Admin::init();
         
         if (function_exists('csv_import_log')) {
-            csv_import_log('warning', 'Emergency Cache Flush wegen hohem Speicherverbrauch', [
-                'memory_usage_percent' => $cache_stats['memory_usage_percent']
-            ]);
+            csv_import_log('info', 'CSV Import Memory Cache System geladen (Safe Mode)');
+        }
+        
+    } catch (Exception $e) {
+        error_log('[CSV Import Cache] Initialisierung fehlgeschlagen: ' . $e->getMessage());
+    }
+}, 20); // Späte Priorität
+
+// Memory Monitor Hook
+add_action('shutdown', function() {
+    $memory_usage = memory_get_usage(true);
+    $peak_memory = memory_get_peak_usage(true);
+    
+    // Logge nur bei hohem Verbrauch
+    if ($peak_memory > 419430400) { // 400MB
+        error_log('[CSV Import Cache] High Memory Usage detected: Current=' . 
+                 size_format($memory_usage) . ', Peak=' . size_format($peak_memory));
+    }
+}, 1);
+
+// Emergency Stop bei kritischem Memory-Verbrauch
+add_action('wp_loaded', function() {
+    $current_memory = memory_get_usage(true);
+    $memory_limit = ini_get('memory_limit');
+    
+    if ($memory_limit !== '-1') {
+        $limit_bytes = function_exists('wp_convert_hr_to_bytes') ? 
+                      wp_convert_hr_to_bytes($memory_limit) : 
+                      (int)str_replace('M', '', $memory_limit) * 1024 * 1024;
+        
+        if ($current_memory > ($limit_bytes * 0.9)) { // 90% des Limits
+            if (class_exists('CSV_Import_Memory_Cache')) {
+                CSV_Import_Memory_Cache::emergency_stop();
+            }
+            error_log('[CSV Import Cache] Emergency Stop triggered at wp_loaded: ' . 
+                     size_format($current_memory) . ' / ' . size_format($limit_bytes));
         }
     }
 });
 
-// JavaScript-Fix für dynamische Styling-Probleme
-add_action('admin_footer', function() {
-    if (!function_exists('get_current_screen') || get_current_screen()->id !== 'dashboard') {
+// Admin Notice für Emergency Mode
+add_action('admin_notices', function() {
+    if (!current_user_can('manage_options')) {
         return;
     }
-    ?>
-    <script type="text/javascript">
-    jQuery(document).ready(function($) {
-        // Entferne alle grünen Styling-Probleme
-        function fixCacheWidgetStyling() {
-            var $widget = $('#csv_import_cache_performance');
-            
-            if ($widget.length) {
-                // Entferne problematische CSS-Klassen
-                $widget.removeClass().addClass('postbox');
-                
-                // Entferne störende Inline-Styles
-                $widget.css({
-                    'position': 'static',
-                    'transform': 'none',
-                    'top': 'auto',
-                    'left': 'auto',
-                    'background': '#fff',
-                    'background-color': '#fff',
-                    'background-image': 'none',
-                    'margin': '0',
-                    'padding': '0',
-                    'border': '1px solid #c3c4c7',
-                    'border-radius': '0'
-                });
-                
-                // Prüfe auf Parent-Container mit grünem Hintergrund
-                $widget.parents().each(function() {
-                    var $parent = $(this);
-                    var bgColor = $parent.css('background-color');
-                    
-                    // Entferne grüne Hintergründe von Parents
-                    if (bgColor && (bgColor.includes('rgb(0, 163, 42)') || bgColor.includes('#00a32a') || bgColor.includes('green'))) {
-                        $parent.css('background', 'transparent');
-                    }
-                });
-                
-                // Stelle sicher, dass der Widget-Header korrekt ist
-                $widget.find('.hndle').css({
-                    'background': '#fff',
-                    'background-color': '#fff',
-                    'border-bottom': '1px solid #c3c4c7',
-                    'color': '#1d2327'
-                });
-                
-                // Stelle sicher, dass der Content-Bereich korrekt ist
-                $widget.find('.inside').css({
-                    'background': '#fff',
-                    'background-color': '#fff',
-                    'padding': '12px'
-                });
-            }
+    
+    if (class_exists('CSV_Import_Memory_Cache')) {
+        $cache_status = CSV_Import_Memory_Cache::get_cache_status();
+        
+        if ($cache_status['stats']['emergency_mode']) {
+            ?>
+            <div class="notice notice-warning">
+                <p>
+                    <strong>🚨 CSV Import Cache Emergency Mode:</strong> 
+                    Das Cache-System läuft im Sicherheitsmodus wegen Memory-Problemen. 
+                    <a href="<?php echo admin_url('tools.php?page=csv-import-cache'); ?>">Cache verwalten</a>
+                </p>
+            </div>
+            <?php
         }
-        
-        // Sofort ausführen
-        fixCacheWidgetStyling();
-        
-        // Nach 100ms nochmal für den Fall dass andere Scripts interferieren
-        setTimeout(fixCacheWidgetStyling, 100);
-        
-        // Bei AJAX-Reloads des Dashboards
-        $(document).on('ajaxComplete', function() {
-            setTimeout(fixCacheWidgetStyling, 50);
-        });
-    });
-    </script>
-    <?php
-});
-
-// Debug-Funktion um CSS-Konflikte zu identifizieren
-add_action('admin_footer', function() {
-    if (defined('WP_DEBUG') && WP_DEBUG && function_exists('get_current_screen') && get_current_screen()->id === 'dashboard') {
-        ?>
-        <script>
-        // Debug: Finde CSS-Regeln die grüne Hintergründe setzen
-        jQuery(document).ready(function($) {
-            var $widget = $('#csv_import_cache_performance');
-            if ($widget.length) {
-                console.log('CSV Cache Widget Debug Info:');
-                console.log('Widget Background:', $widget.css('background-color'));
-                console.log('Widget Classes:', $widget.attr('class'));
-                console.log('Parent Backgrounds:', $widget.parents().map(function() { 
-                    return $(this).css('background-color'); 
-                }).get());
-            }
-        });
-        </script>
-        <?php
     }
 });
 
+// Debug Memory Info (nur bei WP_DEBUG)
+if (defined('WP_DEBUG') && WP_DEBUG) {
+    add_action('wp_footer', function() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        
+        $memory_usage = memory_get_usage(true);
+        $peak_memory = memory_get_peak_usage(true);
+        
+        echo "<!-- CSV Import Memory Debug: Current=" . size_format($memory_usage) . 
+             ", Peak=" . size_format($peak_memory) . " -->";
+    });
+}
+
 if (function_exists('csv_import_log')) {
-    csv_import_log('debug', 'CSV Import Memory Cache System vollständig geladen - Ready for High Performance!');
+    csv_import_log('debug', 'CSV Import Memory Cache System vollständig geladen - MEMORY SAFE EDITION!');
 }
 
 ?>
