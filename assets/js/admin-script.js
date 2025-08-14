@@ -1738,7 +1738,7 @@ window.csvImportCheckHandlers = function() {
             // Nach kurzem Delay Seite neu laden
             setTimeout(() => {
                 window.location.reload();
-            }, 5000);
+            }, 10000);
 
         } else {
             const errorMsg = response.data?.message || response.message || 'Unbekannter Import-Fehler';
