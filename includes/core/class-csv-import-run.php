@@ -36,6 +36,10 @@ class CSV_Import_Pro_Run {
 		
 		do_action( 'csv_import_start' );
 		update_option( 'csv_import_session_id', $this->session_id );
+        // Performance-Monitoring starten
+        if (class_exists('CSV_Import_Performance_Monitor')) {
+            CSV_Import_Performance_Monitor::start();
+        }
 		
 		try {
 			$this->load_and_validate_config();
@@ -49,32 +53,44 @@ class CSV_Import_Pro_Run {
 			
 			$header = $this->csv_data['headers'];
 			$data_rows = $this->csv_data['data'];
+            $total_rows = count($data_rows);
 			
 			$this->validate_header( $header );
 			update_option( 'csv_import_current_header', implode( ',', $header ) );
 
-			csv_import_log( 'info', "CSV-Import gestartet: " . count( $data_rows ) . " Zeilen." );
+			csv_import_log( 'info', "CSV-Import gestartet: " . $total_rows . " Zeilen." );
 			
 			$batch_size = apply_filters( 'csv_import_batch_size', 25 );
 			$results = $this->process_batches( $data_rows, $header, $batch_size );
 
-			$message = sprintf( 
-				'Import erfolgreich: %d Posts erstellt, %d Duplikate übersprungen, %d Fehler.', 
-				$results['created'], 
-				$results['skipped'], 
-				$results['errors'] 
-			);
-			
-			$final_result = [ 
-				'success' => ( $results['errors'] === 0 ), 
-				'message' => $message,
+            // Performance-Daten loggen
+            if (class_exists('CSV_Import_Performance_Monitor')) {
+                CSV_Import_Performance_Monitor::checkpoint('import_finished');
+                CSV_Import_Performance_Monitor::log_performance($results);
+            }
+
+            // Die neue, motivierende Erfolgsmeldung generieren
+            $success_message = csv_import_generate_success_message(
+                [
+                    'processed' => $results['created'],
+                    'total' => $total_rows,
+                    'errors' => $results['errors'],
+                    'session_id' => $this->session_id
+                ],
+                $this->source
+            );
+
+			$final_result = [
+				'success' => ( $results['errors'] === 0 ),
+				'message' => $success_message, // Die neue HTML-Nachricht
 				'processed' => $results['created'],
-				'total' => count( $data_rows ),
-				'errors' => $results['errors']
+				'total' => $total_rows,
+				'errors' => $results['errors'],
+                'html_message' => true // Wichtiges Flag für die Darstellung
 			];
 			
 			do_action( 'csv_import_completed', $final_result, $this->source );
-			csv_import_log( 'info', $message );
+			csv_import_log( 'info', "Import erfolgreich: {$results['created']} Posts erstellt, {$results['skipped']} übersprungen, {$results['errors']} Fehler." );
 			
 			$this->cleanup_after_import();
 			return $final_result;
@@ -212,6 +228,8 @@ class CSV_Import_Pro_Run {
 		$post_id = $this->create_post_transaction( $data, $post_slug );
 		
 		if ( $post_id ) {
+            // Hook für Backup-System
+            do_action('csv_import_post_created', $post_id, $this->session_id, $this->source);
 			return 'created';
 		} else {
 			throw new Exception( 'Post konnte nicht erstellt werden' );
