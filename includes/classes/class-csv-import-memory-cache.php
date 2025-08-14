@@ -1482,8 +1482,308 @@ add_action('admin_head', function() {
     <?php
 });
 
-// Verbesserte Dashboard Widget Implementierung
-function csv_import_render_cache_dashboard_widget() {
+<?php
+// Kompletter Fix für Dashboard Widget Styling-Probleme
+add_action('admin_head', function() {
+    if (!function_exists('get_current_screen') || get_current_screen()->id !== 'dashboard') {
+        return;
+    }
+    ?>
+    <style type="text/css">
+    /* Entferne alle störenden Styling-Elemente vom Cache Dashboard Widget */
+    #csv_import_cache_performance {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        z-index: auto !important;
+        transform: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #fff !important;
+        border: 1px solid #c3c4c7 !important;
+        box-shadow: 0 1px 1px rgba(0,0,0,.04) !important;
+    }
+    
+    /* Widget Header - entferne grünen Balken und störende Elemente */
+    #csv_import_cache_performance .hndle {
+        background: #fff !important;
+        border-bottom: 1px solid #c3c4c7 !important;
+        color: #1d2327 !important;
+        padding: 12px !important;
+        margin: 0 !important;
+        position: relative !important;
+    }
+    
+    /* Entferne alle vor/nach Pseudo-Elemente die grüne Balken verursachen könnten */
+    #csv_import_cache_performance::before,
+    #csv_import_cache_performance::after,
+    #csv_import_cache_performance .hndle::before,
+    #csv_import_cache_performance .hndle::after,
+    #csv_import_cache_performance .inside::before,
+    #csv_import_cache_performance .inside::after {
+        display: none !important;
+        content: none !important;
+        background: none !important;
+        border: none !important;
+        height: 0 !important;
+        width: 0 !important;
+    }
+    
+    /* Widget Content Area */
+    #csv_import_cache_performance .inside {
+        background: #fff !important;
+        border: none !important;
+        margin: 0 !important;
+        padding: 12px !important;
+        position: relative !important;
+    }
+    
+    /* Entferne mögliche grüne Hintergründe von Parent-Elementen */
+    #csv_import_cache_performance,
+    #csv_import_cache_performance * {
+        background-color: transparent !important;
+    }
+    
+    /* Setze explizit weißen Hintergrund für das Widget selbst */
+    #csv_import_cache_performance {
+        background-color: #fff !important;
+    }
+    
+    #csv_import_cache_performance .inside {
+        background-color: #fff !important;
+    }
+    
+    /* Cache Performance Grid */
+    #csv_import_cache_performance .cache-performance-grid {
+        display: flex;
+        gap: 15px;
+        align-items: center;
+        margin: 0 0 15px 0;
+        background: transparent !important;
+    }
+    
+    /* Performance Badge */
+    #csv_import_cache_performance .performance-badge {
+        background: var(--badge-color, #00a32a) !important;
+        color: white !important;
+        padding: 10px !important;
+        border-radius: 4px !important;
+        text-align: center !important;
+        min-width: 100px !important;
+        font-weight: bold !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+    
+    /* Cache Metrics */
+    #csv_import_cache_performance .cache-metrics {
+        flex: 1;
+        font-size: 13px;
+        line-height: 1.4;
+        background: transparent !important;
+    }
+    
+    /* Cache Warning */
+    #csv_import_cache_performance .cache-warning {
+        margin: 10px 0;
+        padding: 8px;
+        background: #fcf0f1 !important;
+        border-left: 4px solid #d63638 !important;
+        border-top: none !important;
+        border-right: none !important;
+        border-bottom: none !important;
+        font-size: 12px;
+        border-radius: 0 4px 4px 0;
+    }
+    
+    /* Cache Actions */
+    #csv_import_cache_performance .cache-actions {
+        margin: 10px 0 0 0;
+        text-align: center;
+        background: transparent !important;
+    }
+    
+    /* Progress Bar */
+    #csv_import_cache_performance .progress-bar {
+        background: #f1f1f1 !important;
+        height: 8px !important;
+        border-radius: 4px !important;
+        overflow: hidden !important;
+        margin-top: 4px !important;
+        border: none !important;
+    }
+    
+    #csv_import_cache_performance .progress-fill {
+        height: 100% !important;
+        background: linear-gradient(90deg, #00a32a, #00ba37) !important;
+        border-radius: 4px !important;
+        transition: width 0.3s ease !important;
+        border: none !important;
+    }
+    
+    /* Entferne mögliche grüne Themes von Parent-Containern */
+    #normal-sortables #csv_import_cache_performance,
+    #side-sortables #csv_import_cache_performance,
+    .postbox-container #csv_import_cache_performance {
+        background: #fff !important;
+        border: 1px solid #c3c4c7 !important;
+    }
+    
+    /* Spezifische Fixes für mögliche Theme-Konflikte */
+    .wp-admin #csv_import_cache_performance {
+        background: #fff !important;
+    }
+    
+    /* Responsive Design */
+    @media (max-width: 782px) {
+        #csv_import_cache_performance .cache-performance-grid {
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        #csv_import_cache_performance .performance-badge {
+            min-width: auto;
+            width: 100%;
+        }
+    }
+    
+    /* Debug: Temporär alle grünen Hintergründe entfernen */
+    #csv_import_cache_performance,
+    #csv_import_cache_performance *,
+    #csv_import_cache_performance *::before,
+    #csv_import_cache_performance *::after {
+        background-color: transparent !important;
+        background-image: none !important;
+        background: transparent !important;
+    }
+    
+    /* Dann explizit die gewünschten Hintergründe setzen */
+    #csv_import_cache_performance {
+        background: #fff !important;
+    }
+    
+    #csv_import_cache_performance .inside {
+        background: #fff !important;
+    }
+    
+    #csv_import_cache_performance .performance-badge {
+        background: var(--badge-color, #00a32a) !important;
+    }
+    
+    #csv_import_cache_performance .cache-warning {
+        background: #fcf0f1 !important;
+    }
+    
+    #csv_import_cache_performance .progress-bar {
+        background: #f1f1f1 !important;
+    }
+    
+    #csv_import_cache_performance .progress-fill {
+        background: linear-gradient(90deg, #00a32a, #00ba37) !important;
+    }
+    </style>
+    <?php
+});
+
+// JavaScript-Fix für dynamische Styling-Probleme
+add_action('admin_footer', function() {
+    if (!function_exists('get_current_screen') || get_current_screen()->id !== 'dashboard') {
+        return;
+    }
+    ?>
+    <script type="text/javascript">
+    jQuery(document).ready(function($) {
+        // Entferne alle grünen Styling-Probleme
+        function fixCacheWidgetStyling() {
+            var $widget = $('#csv_import_cache_performance');
+            
+            if ($widget.length) {
+                // Entferne problematische CSS-Klassen
+                $widget.removeClass().addClass('postbox');
+                
+                // Entferne störende Inline-Styles
+                $widget.css({
+                    'position': 'static',
+                    'transform': 'none',
+                    'top': 'auto',
+                    'left': 'auto',
+                    'background': '#fff',
+                    'background-color': '#fff',
+                    'background-image': 'none',
+                    'margin': '0',
+                    'padding': '0',
+                    'border': '1px solid #c3c4c7',
+                    'border-radius': '0'
+                });
+                
+                // Prüfe auf Parent-Container mit grünem Hintergrund
+                $widget.parents().each(function() {
+                    var $parent = $(this);
+                    var bgColor = $parent.css('background-color');
+                    
+                    // Entferne grüne Hintergründe von Parents
+                    if (bgColor && (bgColor.includes('rgb(0, 163, 42)') || bgColor.includes('#00a32a') || bgColor.includes('green'))) {
+                        $parent.css('background', 'transparent');
+                    }
+                });
+                
+                // Stelle sicher, dass der Widget-Header korrekt ist
+                $widget.find('.hndle').css({
+                    'background': '#fff',
+                    'background-color': '#fff',
+                    'border-bottom': '1px solid #c3c4c7',
+                    'color': '#1d2327'
+                });
+                
+                // Stelle sicher, dass der Content-Bereich korrekt ist
+                $widget.find('.inside').css({
+                    'background': '#fff',
+                    'background-color': '#fff',
+                    'padding': '12px'
+                });
+            }
+        }
+        
+        // Sofort ausführen
+        fixCacheWidgetStyling();
+        
+        // Nach 100ms nochmal für den Fall dass andere Scripts interferieren
+        setTimeout(fixCacheWidgetStyling, 100);
+        
+        // Bei AJAX-Reloads des Dashboards
+        $(document).on('ajaxComplete', function() {
+            setTimeout(fixCacheWidgetStyling, 50);
+        });
+    });
+    </script>
+    <?php
+});
+
+// Alternative Widget-Registrierung mit cleanem HTML
+add_action('wp_dashboard_setup', function() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    
+    // Entferne das alte Widget falls vorhanden
+    remove_meta_box('csv_import_cache_performance', 'dashboard', 'normal');
+    remove_meta_box('csv_import_cache_performance', 'dashboard', 'side');
+    
+    // Registriere Widget neu mit sauberem Callback
+    wp_add_dashboard_widget(
+        'csv_import_cache_performance',
+        'CSV Import Cache Performance', // Entferne Emoji aus dem Titel
+        function() {
+            // Saubere HTML-Ausgabe ohne störende Elemente
+            echo '<div style="background: #fff; margin: 0; padding: 0;">';
+            csv_import_render_clean_cache_widget();
+            echo '</div>';
+        }
+    );
+});
+
+// Saubere Widget-Darstellung ohne störende Elemente
+function csv_import_render_clean_cache_widget() {
     if (!class_exists('CSV_Import_Memory_Cache')) {
         echo '<p>Cache System nicht verfügbar.</p>';
         return;
@@ -1493,120 +1793,78 @@ function csv_import_render_cache_dashboard_widget() {
         $cache_status = CSV_Import_Memory_Cache::get_cache_status();
         $stats = $cache_status['stats'];
         
-        // Performance Badge Farbe bestimmen
+        // Performance Badge Farbe
         $badge_color = match($cache_status['performance']) {
             'excellent' => '#00a32a',
             'good' => '#f56e28',
             default => '#d63638'
         };
         
-        // Performance Text
-        $performance_text = match($cache_status['performance']) {
-            'excellent' => 'Exzellent',
-            'good' => 'Gut',
-            default => 'Probleme'
-        };
-        
         ?>
         <div class="cache-performance-grid">
-            <div class="performance-badge" style="--badge-color: <?php echo esc_attr($badge_color); ?>;">
+            <div class="performance-badge" style="background: <?php echo esc_attr($badge_color); ?> !important; color: white; padding: 10px; border-radius: 4px; text-align: center; min-width: 100px; font-weight: bold;">
                 <div style="font-size: 18px;"><?php echo esc_html($stats['hit_rate']); ?>%</div>
                 <div style="font-size: 12px;">Hit Rate</div>
             </div>
             
-            <div class="cache-metrics">
+            <div class="cache-metrics" style="flex: 1; font-size: 13px; line-height: 1.4;">
                 <div><strong>Cache Items:</strong> <?php echo esc_html(number_format($stats['total_items'])); ?></div>
                 <div><strong>Memory:</strong> <?php echo esc_html(size_format($stats['memory_usage'])); ?> / <?php echo esc_html(size_format($stats['memory_limit'])); ?></div>
                 <div>
                     <strong>Status:</strong> 
                     <span style="color: <?php echo $cache_status['healthy'] ? 'green' : 'red'; ?>;">
-                        <?php echo $cache_status['healthy'] ? '✅ Gesund' : '❌ ' . $performance_text; ?>
+                        <?php echo $cache_status['healthy'] ? 'Gesund' : 'Probleme'; ?>
                     </span>
                 </div>
                 
-                <!-- Visueller Memory Usage Indicator -->
                 <div style="margin-top: 8px;">
                     <small>Memory Usage: <?php echo esc_html($stats['memory_usage_percent']); ?>%</small>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: <?php echo esc_attr($stats['memory_usage_percent']); ?>%;"></div>
+                    <div class="progress-bar" style="background: #f1f1f1; height: 8px; border-radius: 4px; margin-top: 4px;">
+                        <div class="progress-fill" style="height: 100%; background: linear-gradient(90deg, #00a32a, #00ba37); border-radius: 4px; width: <?php echo esc_attr($stats['memory_usage_percent']); ?>%;"></div>
                     </div>
                 </div>
             </div>
         </div>
         
         <?php if ($stats['memory_usage_percent'] > 80): ?>
-        <div class="cache-warning">
-            ⚠️ <strong>Hoher Speicherverbrauch:</strong> Cache-Bereinigung empfohlen.
+        <div class="cache-warning" style="margin: 10px 0; padding: 8px; background: #fcf0f1; border-left: 4px solid #d63638; font-size: 12px; border-radius: 0 4px 4px 0;">
+            <strong>Hoher Speicherverbrauch:</strong> Cache-Bereinigung empfohlen.
         </div>
         <?php endif; ?>
         
-        <div class="cache-actions">
+        <div class="cache-actions" style="margin: 10px 0 0 0; text-align: center;">
             <a href="<?php echo esc_url(admin_url('tools.php?page=csv-import-cache')); ?>" class="button button-small">
-                🛠️ Cache verwalten
+                Cache verwalten
             </a>
-            
-            <?php if ($stats['hit_rate'] < 30): ?>
-            <a href="<?php echo esc_url(admin_url('tools.php?page=csv-import-cache')); ?>" class="button button-small" style="margin-left: 5px; background: #f56e28; color: white; border-color: #f56e28;">
-                🔧 Performance prüfen
-            </a>
-            <?php endif; ?>
         </div>
-        
         <?php
-    } catch (Exception $e) {
-        echo '<div class="cache-warning">';
-        echo '⚠️ <strong>Cache Fehler:</strong> ' . esc_html($e->getMessage());
-        echo '</div>';
         
-        error_log('CSV Import Cache Dashboard Widget Error: ' . $e->getMessage());
+    } catch (Exception $e) {
+        echo '<div style="margin: 10px 0; padding: 8px; background: #fcf0f1; border-left: 4px solid #d63638; font-size: 12px;">';
+        echo '<strong>Cache Fehler:</strong> ' . esc_html($e->getMessage());
+        echo '</div>';
     }
 }
 
-// Dashboard Widget mit verbesserter Error-Behandlung registrieren
-add_action('wp_dashboard_setup', function() {
-    if (!current_user_can('manage_options')) {
-        return;
-    }
-    
-    wp_add_dashboard_widget(
-        'csv_import_cache_performance',
-        '🚀 CSV Import Cache Performance',
-        'csv_import_render_cache_dashboard_widget'
-    );
-});
-
-// Zusätzlicher CSS-Fix für ältere WordPress-Versionen
+// Debug-Funktion um CSS-Konflikte zu identifizieren
 add_action('admin_footer', function() {
-    if (!function_exists('get_current_screen') || get_current_screen()->id !== 'dashboard') {
-        return;
-    }
-    ?>
-    <script type="text/javascript">
-    jQuery(document).ready(function($) {
-        // Fallback für Browser ohne CSS Grid Support
-        var $widget = $('#csv_import_cache_performance');
-        if ($widget.length) {
-            // Stelle sicher, dass das Widget korrekt positioniert ist
-            $widget.css({
-                'position': 'static',
-                'transform': 'none',
-                'top': 'auto',
-                'left': 'auto'
-            });
-            
-            // Progressive Enhancement für ältere Browser
-            if (!window.CSS || !CSS.supports('display', 'flex')) {
-                $widget.find('.cache-performance-grid').css({
-                    'display': 'block'
-                });
-                $widget.find('.performance-badge, .cache-metrics').css({
-                    'display': 'block',
-                    'margin-bottom': '10px'
-                });
+    if (defined('WP_DEBUG') && WP_DEBUG && get_current_screen()->id === 'dashboard') {
+        ?>
+        <script>
+        // Debug: Finde CSS-Regeln die grüne Hintergründe setzen
+        jQuery(document).ready(function($) {
+            var $widget = $('#csv_import_cache_performance');
+            if ($widget.length) {
+                console.log('CSV Cache Widget Debug Info:');
+                console.log('Widget Background:', $widget.css('background-color'));
+                console.log('Widget Classes:', $widget.attr('class'));
+                console.log('Parent Backgrounds:', $widget.parents().map(function() { 
+                    return $(this).css('background-color'); 
+                }).get());
             }
-        }
-    });
-    </script>
-    <?php
+        });
+        </script>
+        <?php
+    }
 });
 ?>
