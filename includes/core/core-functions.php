@@ -1457,24 +1457,25 @@ function csv_import_clear_progress(): void {
 function csv_import_update_import_stats( array $result, string $source ): void {
     $total_imported = get_option( 'csv_import_total_imported', 0 );
     $total_imported += $result['processed'];
-    
+
     update_option( 'csv_import_total_imported', $total_imported );
     update_option( 'csv_import_last_run', current_time( 'mysql' ) );
     update_option( 'csv_import_last_count', $result['processed'] );
     update_option( 'csv_import_last_source', ucfirst( $source ) );
-    
+
     // Erfolgsquote berechnen
     if ( $result['total'] > 0 ) {
         $success_rate = round( ( $result['processed'] / $result['total'] ) * 100, 1 );
         update_option( 'csv_import_last_success_rate', $success_rate );
     }
-    
-    // Durchschnittliche Verarbeitungszeit
-    $start_time = get_option( 'csv_import_start_time', time() );
-    $processing_time = time() - $start_time;
-    if ( $result['processed'] > 0 ) {
-        $time_per_item = $processing_time / $result['processed'];
-        update_option( 'csv_import_avg_processing_time', round( $time_per_item, 2 ) );
+
+    // Performance-Daten aus dem Performance Monitor holen und speichern
+    if ( class_exists('CSV_Import_Performance_Monitor') && method_exists('CSV_Import_Performance_Monitor', 'get_stats') ) {
+        $perf_stats = CSV_Import_Performance_Monitor::get_stats();
+        if ($perf_stats) {
+            update_option('csv_import_last_execution_time', $perf_stats['total_time']);
+            update_option('csv_import_last_memory_peak', $perf_stats['peak_memory']);
+        }
     }
 }
 
@@ -2007,8 +2008,7 @@ add_action( 'csv_import_weekly_maintenance', 'csv_import_weekly_maintenance' );
 
 /**
  * Prüft ob der Scheduler grundsätzlich aktiviert ist
- * 
- * @return bool True wenn Scheduler aktiviert, false wenn deaktiviert
+ * * @return bool True wenn Scheduler aktiviert, false wenn deaktiviert
  */
 function csv_import_is_scheduler_enabled(): bool {
     return get_option('csv_import_scheduler_enabled', false);
@@ -2016,8 +2016,7 @@ function csv_import_is_scheduler_enabled(): bool {
 
 /**
  * Aktiviert den Scheduler mit umfassenden Sicherheitsprüfungen
- * 
- * @return array Ergebnis mit success/message
+ * * @return array Ergebnis mit success/message
  */
 function csv_import_enable_scheduler(): array {
     // Nur für Admins
@@ -2118,8 +2117,7 @@ function csv_import_enable_scheduler(): array {
 
 /**
  * Deaktiviert den Scheduler und entfernt alle geplanten Events
- * 
- * @return array Ergebnis mit success/message
+ * * @return array Ergebnis mit success/message
  */
 function csv_import_disable_scheduler(): array {
     // Nur für Admins
@@ -2183,8 +2181,7 @@ function csv_import_disable_scheduler(): array {
 
 /**
  * Audit-Log für Scheduler-Aktivitäten (Sicherheitsprotokoll)
- * 
- * @param string $action Die ausgeführte Aktion
+ * * @param string $action Die ausgeführte Aktion
  * @param int $user_id ID des ausführenden Benutzers
  * @param bool $success Ob die Aktion erfolgreich war
  * @param array $details Zusätzliche Details
@@ -2229,8 +2226,7 @@ function csv_import_log_scheduler_audit(string $action, int $user_id, bool $succ
 
 /**
  * Sendet Sicherheitswarnungen bei kritischen Scheduler-Aktionen
- * 
- * @param string $action Die Aktion
+ * * @param string $action Die Aktion
  * @param array $audit_entry Audit-Eintrag
  */
 function csv_import_send_security_alert(string $action, array $audit_entry): void {
@@ -2266,8 +2262,7 @@ function csv_import_send_security_alert(string $action, array $audit_entry): voi
 /**
  * Prüft ob ein Benutzer Scheduler-Aktionen durchführen darf
  * Zusätzliche Sicherheitsebene über die WordPress-Capabilities hinaus
- * 
- * @param int $user_id Benutzer-ID (optional, Standard: aktueller Benutzer)
+ * * @param int $user_id Benutzer-ID (optional, Standard: aktueller Benutzer)
  * @return bool True wenn berechtigt
  */
 function csv_import_can_manage_scheduler(int $user_id = 0): bool {
@@ -2319,8 +2314,7 @@ function csv_import_can_manage_scheduler(int $user_id = 0): bool {
 
 /**
  * Holt Scheduler-Aktivierungs-Informationen für das Admin-Interface
- * 
- * @return array Aktivierungsdaten
+ * * @return array Aktivierungsdaten
  */
 function csv_import_get_scheduler_activation_info(): array {
     return [
@@ -2337,8 +2331,7 @@ function csv_import_get_scheduler_activation_info(): array {
 
 /**
  * Holt den Namen des Benutzers der den Scheduler aktiviert hat
- * 
- * @return string Benutzername oder Fallback
+ * * @return string Benutzername oder Fallback
  */
 function csv_import_get_activation_user_name(): string {
     $user_id = get_option('csv_import_scheduler_activated_by');
@@ -2357,8 +2350,7 @@ function csv_import_get_activation_user_name(): string {
 
 /**
  * Prüft die Verfügbarkeit aller für den Scheduler erforderlichen Abhängigkeiten
- * 
- * @return array Status der Dependencies
+ * * @return array Status der Dependencies
  */
 function csv_import_check_scheduler_dependencies(): array {
     $dependencies = [
@@ -2448,3 +2440,157 @@ function csv_import_get_dropbox_status( string $url ): string {
 
 
 csv_import_log( 'debug', 'CSV Import Pro Core Functions geladen - Version 5.2 (Dashboard Widget bereinigt)' );
+
+
+/**
+ * Generiert eine motivierende und informative Erfolgsmeldung
+ */
+function csv_import_generate_success_message(array $result, string $source): string {
+    $processed = $result['processed'] ?? 0;
+    $total = $result['total'] ?? 0;
+    $errors = $result['errors'] ?? 0;
+    $session_id = $result['session_id'] ?? '';
+
+    // Performance-Daten sammeln
+    $execution_time = get_option('csv_import_last_execution_time', 0);
+    $memory_peak = get_option('csv_import_last_memory_peak', 0);
+
+    // Motivations-Nachrichten für verschiedene Szenarien
+    $contextual_message_data = csv_import_get_contextual_messages($result, $execution_time);
+    $success_message = $contextual_message_data['title'];
+
+    // Detaillierte Statistiken
+    $stats_html = "<div class='csv-success-stats'>";
+    $stats_html .= "<div class='stat-item success'>";
+    $stats_html .= "<span class='stat-number'>{$processed}</span>";
+    $stats_html .= "<span class='stat-label'>Seiten erstellt</span>";
+    $stats_html .= "</div>";
+
+    if ($total > $processed) {
+        $skipped = $total - $processed - $errors;
+        if ($skipped > 0) {
+            $stats_html .= "<div class='stat-item warning'>";
+            $stats_html .= "<span class='stat-number'>{$skipped}</span>";
+            $stats_html .= "<span class='stat-label'>Duplikate übersprungen</span>";
+            $stats_html .= "</div>";
+        }
+    }
+
+    if ($errors > 0) {
+        $stats_html .= "<div class='stat-item error'>";
+        $stats_html .= "<span class='stat-number'>{$errors}</span>";
+        $stats_html .= "<span class='stat-label'>Fehler aufgetreten</span>";
+        $stats_html .= "</div>";
+    }
+
+    // Performance-Metriken hinzufügen
+    if ($execution_time > 0) {
+        $time_formatted = $execution_time < 60
+            ? round($execution_time, 1) . 's'
+            : round($execution_time / 60, 1) . 'min';
+
+        $stats_html .= "<div class='stat-item info'>";
+        $stats_html .= "<span class='stat-number'>{$time_formatted}</span>";
+        $stats_html .= "<span class='stat-label'>Verarbeitungszeit</span>";
+        $stats_html .= "</div>";
+    }
+
+    if ($memory_peak > 0) {
+        $stats_html .= "<div class='stat-item info'>";
+        $stats_html .= "<span class='stat-number'>" . size_format($memory_peak) . "</span>";
+        $stats_html .= "<span class='stat-label'>Speicher-Peak</span>";
+        $stats_html .= "</div>";
+    }
+
+    $stats_html .= "</div>";
+
+    // Nächste Schritte vorschlagen
+    $next_steps = csv_import_get_next_steps($processed, $source);
+
+    // Zusammenfassende Erfolgsmeldung
+    $final_message = "
+    <div class='csv-import-success-message " . esc_attr($contextual_message_data['css_class']) . "'>
+        <div class='success-header'>
+            {$success_message}
+        </div>
+
+        <div class='success-summary'>
+            <strong>📊 Import-Zusammenfassung:</strong><br>
+            Quelle: <span class='highlight'>" . ucfirst($source) . "</span> •
+            Verarbeitet: <span class='highlight'>{$processed} von {$total}</span> Einträgen
+        </div>
+
+        {$stats_html}
+
+        <div class='success-actions'>
+            <h4>🎯 Was möchten Sie als nächstes tun?</h4>
+            {$next_steps}
+        </div>
+
+        <div class='success-footer'>
+            <small>💡 <strong>Tipp:</strong> Sie können jederzeit einen neuen Import starten oder die Einstellungen anpassen.</small>
+        </div>
+    </div>";
+
+    return $final_message;
+}
+
+/**
+ * Generiert hilfreiche nächste Schritte basierend auf dem Import-Ergebnis
+ */
+function csv_import_get_next_steps(int $created_posts, string $source): string {
+    $steps = [];
+    $post_type = get_option('csv_import_post_type', 'page');
+
+    if ($created_posts > 0) {
+        $steps[] = "<a href='" . admin_url('edit.php?post_type=' . $post_type) . "' class='button button-primary'>📄 Erstellte Inhalte ansehen</a>";
+        $steps[] = "<a href='" . home_url() . "' target='_blank' class='button'>🌐 Website besuchen</a>";
+    }
+
+    $steps[] = "<a href='" . admin_url('tools.php?page=csv-import') . "' class='button'>🔄 Neuen Import starten</a>";
+    $steps[] = "<a href='" . admin_url('tools.php?page=csv-import-settings') . "' class='button'>⚙️ Einstellungen anpassen</a>";
+
+    if (class_exists('CSV_Import_Scheduler') && method_exists('CSV_Import_Scheduler', 'is_scheduled') && !CSV_Import_Scheduler::is_scheduled() && $created_posts > 5) {
+        $steps[] = "<a href='" . admin_url('tools.php?page=csv-import-scheduling') . "' class='button button-hero' style='background: linear-gradient(45deg, #00a32a, #00ba37); border: none; color: white;'>⏰ Automatische Imports einrichten</a>";
+    }
+
+    return "<div class='action-buttons'>" . implode(' ', $steps) . "</div>";
+}
+
+/**
+ * Zusätzliche Motivations-Nachrichten für verschiedene Szenarien
+ */
+function csv_import_get_contextual_messages(array $result, float $execution_time): array {
+    $processed = $result['processed'] ?? 0;
+    $errors = $result['errors'] ?? 0;
+
+    if ($errors === 0 && $processed > 0) {
+        return [
+            'title' => '🏆 Perfekter Import!',
+            'message' => 'Alle Daten wurden fehlerfrei verarbeitet - das ist Profi-Niveau!',
+            'css_class' => 'perfect-import'
+        ];
+    }
+
+    if ($processed >= 100) {
+        return [
+            'title' => '🚀 Beeindruckend!',
+            'message' => "Über {$processed} Seiten in einem Durchgang - das ist Power!",
+            'css_class' => 'large-import'
+        ];
+    }
+
+    if ($execution_time > 0 && $execution_time < 30 && $processed > 10) {
+        return [
+            'title' => '⚡ Blitzschnell!',
+            'message' => "Import in unter 30 Sekunden abgeschlossen - optimale Performance!",
+            'css_class' => 'fast-import'
+        ];
+    }
+
+    return [
+        'title' => '✅ Import erfolgreich!',
+        'message' => 'Ihre Daten sind jetzt live und einsatzbereit!',
+        'css_class' => 'standard-success'
+    ];
+}
