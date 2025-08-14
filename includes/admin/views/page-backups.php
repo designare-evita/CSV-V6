@@ -41,7 +41,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 							<?php foreach ( $sessions as $session ) : ?>
 								<tr>
 									<td><code><?php echo esc_html( $session->import_session ); ?></code></td>
-									<td><?php echo mysql2date( 'd.m.Y H:i:s', $session->import_date ); ?></td>
+									<td><<?php $timestamp = strtotime( $import['time'] ?? '' );
+    echo esc_html( wp_date( 'd.m.Y H:i:s', $timestamp ) );  ?></td>
 									<td>
 										<?php 
 										$source_labels = [ 'dropbox' => '☁️ Dropbox', 'local' => '📁 Lokal' ];
