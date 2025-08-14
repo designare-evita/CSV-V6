@@ -2396,6 +2396,42 @@ function csv_import_check_scheduler_dependencies(): array {
     return $summary;
 }
 
+/**
+ * Prüft den Status einer Dropbox-URL für die Anzeige im Admin-Bereich.
+ *
+ * @param string $url Die Dropbox-URL.
+ * @return string HTML-Statusmeldung.
+ */
+function csv_import_get_dropbox_status( string $url ): string {
+    if ( empty( $url ) ) {
+        return '';
+    }
+
+    if ( ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
+        return '<span style="color:red;">❌ Ungültige URL</span>';
+    }
+
+    // Prüfen, ob die URL erreichbar ist, ohne die ganze Datei herunterzuladen
+    $response = wp_remote_head( $url, [ 'timeout' => 10 ] );
+
+    if ( is_wp_error( $response ) ) {
+        return '<span style="color:red;">❌ Fehler bei der Verbindung</span>';
+    }
+
+    $http_code = wp_remote_retrieve_response_code( $response );
+
+    if ( $http_code === 200 ) {
+        $content_length = wp_remote_retrieve_header( $response, 'content-length' );
+        $file_size = $content_length ? size_format( $content_length ) : 'unbekannte Größe';
+        return sprintf(
+            '<span style="color:green;">✅ Datei gefunden (%s)</span>',
+            $file_size
+        );
+    } else {
+        return '<span style="color:red;">❌ Datei nicht erreichbar (Code: ' . esc_html( $http_code ) . ')</span>';
+    }
+}
+
 // ===================================================================
 // ENDE DER NEUEN SCHEDULER-AKTIVIERUNGSFUNKTIONEN
 // ===================================================================
