@@ -33,7 +33,7 @@ class CSV_Import_Notifications {
         $message .= "- Ergebnis: " . $result['message'] . "\n";
 
         foreach ($settings['recipients'] as $recipient) {
-            wp_mail($recipient, $subject, $message);
+            // wp_mail($recipient, $subject, $message);
         }
     }
 
@@ -57,7 +57,7 @@ class CSV_Import_Notifications {
         $message .= "Import-Dashboard: " . admin_url('tools.php?page=csv-import') . "\n";
 
         foreach ($settings['recipients'] as $recipient) {
-            wp_mail($recipient, $subject, $message);
+            // wp_mail($recipient, $subject, $message);
         }
     }
 
