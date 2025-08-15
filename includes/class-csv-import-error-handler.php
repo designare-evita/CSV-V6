@@ -117,7 +117,7 @@ if ( ! class_exists( 'CSV_Import_Error_Handler' ) ) {
                 $body .= "Kontext:\n" . wp_json_encode( $error_entry['context'], JSON_PRETTY_PRINT ) . "\n\n";
             }
             $body .= "-- CSV Import Pro Error Handler";
-            wp_mail( $admin_email, $subject, $body );
+            // wp_mail( $admin_email, $subject, $body );
         }
         
         private static function get_debug_backtrace() {
